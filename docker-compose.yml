@@ -1,0 +1,83 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL + TimescaleDB ───────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: supervision_timescaledb
+    environment:
+      POSTGRES_DB: supervision_db
+      POSTGRES_USER: supervision_user
+      POSTGRES_PASSWORD: supervision_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./docker/init-timescaledb.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supervision_user -d supervision_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: supervision_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend FastAPI ────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: supervision_backend
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Celery Worker ──────────────────────────────────────
+  celery_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: supervision_celery
+    env_file: .env
+    depends_on:
+      - redis
+      - timescaledb
+    command: celery -A app.workers.celery_app worker --loglevel=info
+
+  # ── Flower — monitoring Celery ────────────────────────
+  flower:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: supervision_flower
+    env_file: .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    command: celery -A app.workers.celery_app flower --port=5555
+
+volumes:
+  timescaledb_data:
+  redis_data:

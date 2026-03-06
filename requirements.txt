@@ -1,0 +1,43 @@
+# ── Web Framework ──────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12
+
+# ── Base de données ────────────────────────────────────
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0          # driver PostgreSQL async
+alembic==1.13.3
+psycopg2-binary==2.9.9   # driver PostgreSQL sync (Alembic)
+
+# ── Cache & Broker ─────────────────────────────────────
+redis==5.1.0
+celery==5.4.0
+flower==2.0.1             # monitoring Celery
+
+# ── Authentification & Sécurité ────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# ── Validation & Sérialisation ─────────────────────────
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0
+
+# ── HTTP Client (Agent proxy) ──────────────────────────
+httpx==0.27.2
+aiohttp==3.10.5
+
+# ── Notifications ──────────────────────────────────────
+aiosmtplib==3.0.2         # email async
+# webhooks via httpx
+
+# ── Utilitaires ────────────────────────────────────────
+python-dotenv==1.0.1
+loguru==0.7.2
+pendulum==3.0.0           # gestion dates
+
+# ── Tests ──────────────────────────────────────────────
+pytest==8.3.3
+pytest-asyncio==0.24.0
+httpx==0.27.2             # client test FastAPI
+factory-boy==3.3.1
