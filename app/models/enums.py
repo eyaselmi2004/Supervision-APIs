@@ -42,8 +42,6 @@ class ChannelType(str, enum.Enum):
     EMAIL   = "EMAIL"
     WEBHOOK = "WEBHOOK"
 
-
 class UserRole(str, enum.Enum):
-    ADMIN   = "ADMIN"
-    DEV     = "DEV"
-    MANAGER = "MANAGER"
+    ADMIN  = "ADMIN"
+    DEVOPS = "DEVOPS"

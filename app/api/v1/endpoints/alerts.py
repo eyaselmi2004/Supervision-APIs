@@ -16,7 +16,7 @@ from app.schemas.schemas import (
 router = APIRouter(tags=["Alerts"])
 
 
-# alertRule
+# ── AlertRule ─────────────────────────────────────────────
 
 @router.get("/alert-rules", response_model=List[AlertRuleResponse])
 async def list_rules(
@@ -55,7 +55,7 @@ async def update_rule(
         rule_id, data.name, data.threshold, data.window_seconds, data.is_enabled
     )
     if not row:
-        raise HTTPException(status_code=404, detail="Règle introuvable")
+        raise HTTPException(status_code=404, detail="Regle introuvable")
     return dict(row)
 
 
@@ -67,21 +67,20 @@ async def delete_rule(
 ):
     deleted = await AlertRepository(conn).delete_rule(rule_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail="Règle introuvable")
-    return MessageResponse(message="Règle supprimée")
+        raise HTTPException(status_code=404, detail="Regle introuvable")
+    return MessageResponse(message="Regle supprimee")
 
 
-#alert
+# ── Alert ─────────────────────────────────────────────────
 
 @router.get("/alerts", response_model=List[AlertResponse])
 async def list_alerts(
     status_filter: Optional[str] = Query(None, alias="status"),
-    severity: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     conn: asyncpg.Connection = Depends(get_conn),
     _: str = Depends(get_current_user_id),
 ):
-    rows = await AlertRepository(conn).get_all_alerts(status_filter, severity, limit)
+    rows = await AlertRepository(conn).get_all_alerts(status_filter, limit)
     return [dict(r) for r in rows]
 
 
@@ -116,3 +115,15 @@ async def resolve_alert(
 ):
     row = await AlertService(conn).resolve(alert_id)
     return dict(row)
+@router.post("/alerts/evaluate/{endpoint_id}")
+async def evaluate_rules(
+    endpoint_id: UUID,
+    conn: asyncpg.Connection = Depends(get_conn),
+    _: str = Depends(get_current_user_id),
+):
+    """
+    Vérifie les règles actives d'un endpoint et crée les alertes si seuils dépassés.
+    Appelé automatiquement après chaque ingestion de métriques.
+    """
+    alerts = await AlertService(conn).evaluate_rules(endpoint_id)
+    return {"alerts_created": len(alerts), "alerts": alerts}

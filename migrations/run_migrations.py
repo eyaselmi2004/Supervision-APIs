@@ -28,6 +28,7 @@ SQL_FILES = [
     "004_hypertable.sql",
     "005_compression.sql",
     "006_continuous_agg.sql",
+     "007_update_role.sql",
 ]
 
 

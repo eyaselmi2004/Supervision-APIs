@@ -40,7 +40,8 @@ class UserCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
     password: str = Field(..., min_length=6)
-    role: UserRole = UserRole.DEV
+    role: UserRole = UserRole.DEVOPS
+
 
 
 class UserResponse(BaseModel):
