@@ -1,7 +1,7 @@
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 import asyncpg
 
 from app.core.database import get_conn
@@ -18,10 +18,11 @@ router = APIRouter(prefix="/api-services", tags=["API Services"])
 
 @router.get("", response_model=List[ApiServiceResponse])
 async def list_services(
+    project_id: Optional[UUID] = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
     _: str = Depends(get_current_user_id),
 ):
-    rows = await ApiServiceRepository(conn).get_all()
+    rows = await ApiServiceRepository(conn).get_all(project_id=project_id)
     return [dict(r) for r in rows]
 
 
@@ -31,7 +32,12 @@ async def create_service(
     conn: asyncpg.Connection = Depends(get_conn),
     _: str = Depends(get_current_user_id),
 ):
-    row = await ApiServiceRepository(conn).create(data.name, data.base_url, data.is_active)
+    row = await ApiServiceRepository(conn).create(
+        data.name,
+        data.base_url,
+        data.is_active,
+        data.project_id,
+    )
     return dict(row)
 
 
@@ -45,6 +51,7 @@ async def get_service(
     service = await repo.get_by_id(service_id)
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
+
     endpoints = await repo.get_endpoints(service_id)
     result = dict(service)
     result["endpoints"] = [dict(e) for e in endpoints]
@@ -59,7 +66,11 @@ async def update_service(
     _: str = Depends(get_current_user_id),
 ):
     row = await ApiServiceRepository(conn).update(
-        service_id, data.name, data.base_url, data.is_active
+        service_id,
+        data.name,
+        data.base_url,
+        data.is_active,
+        data.project_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Service introuvable")
@@ -99,5 +110,6 @@ async def create_endpoint(
     service = await repo.get_by_id(service_id)
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
+
     row = await repo.create_endpoint(service_id, data.path, data.method.value, data.is_active)
     return dict(row)

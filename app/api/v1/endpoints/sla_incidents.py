@@ -144,7 +144,6 @@ async def update_channel(
 @router.delete("/notification-channels/{channel_id}", response_model=MessageResponse)
 async def delete_channel(
     channel_id: UUID,
-    data: NotificationChannelUpdate,
     conn: asyncpg.Connection = Depends(get_conn),
     _: str = Depends(get_current_user_id),
 ):

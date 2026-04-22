@@ -10,50 +10,103 @@ class ApiServiceRepository:
 
     # ── ApiService ───────────────────────────────────────
 
-    async def get_all(self) -> List[asyncpg.Record]:
+    async def get_all(self, project_id: Optional[UUID] = None) -> List[asyncpg.Record]:
+        if project_id is not None:
+            return await self.conn.fetch(
+                """
+                SELECT *
+                FROM api_services
+                WHERE project_id = $1
+                ORDER BY name
+                """,
+                project_id,
+            )
+
         return await self.conn.fetch(
-            "SELECT * FROM api_services ORDER BY name"
+            """
+            SELECT *
+            FROM api_services
+            ORDER BY name
+            """
         )
 
     async def get_by_id(self, service_id: UUID) -> Optional[asyncpg.Record]:
         return await self.conn.fetchrow(
-            "SELECT * FROM api_services WHERE id = $1", service_id
+            "SELECT * FROM api_services WHERE id = $1",
+            service_id,
         )
 
-    async def create(self, name: str, base_url: str, is_active: bool) -> asyncpg.Record:
+    async def create(
+        self,
+        name: str,
+        base_url: str,
+        is_active: bool,
+        project_id: Optional[UUID] = None,
+    ) -> asyncpg.Record:
         return await self.conn.fetchrow(
             """
-            INSERT INTO api_services (name, base_url, is_active)
-            VALUES ($1, $2, $3)
+            INSERT INTO api_services (name, base_url, is_active, project_id)
+            VALUES ($1, $2, $3, $4)
             RETURNING *
             """,
-            name, base_url, is_active,
+            name,
+            base_url,
+            is_active,
+            project_id,
         )
 
     async def update(
-        self, service_id: UUID,
+        self,
+        service_id: UUID,
         name: Optional[str] = None,
         base_url: Optional[str] = None,
         is_active: Optional[bool] = None,
+        project_id: Optional[UUID] = None,
     ) -> Optional[asyncpg.Record]:
-        fields, values, idx = [], [], 1
+        fields = []
+        values = []
+        idx = 1
+
         if name is not None:
-            fields.append(f"name = ${idx}"); values.append(name); idx += 1
+            fields.append(f"name = ${idx}")
+            values.append(name)
+            idx += 1
+
         if base_url is not None:
-            fields.append(f"base_url = ${idx}"); values.append(base_url); idx += 1
+            fields.append(f"base_url = ${idx}")
+            values.append(base_url)
+            idx += 1
+
         if is_active is not None:
-            fields.append(f"is_active = ${idx}"); values.append(is_active); idx += 1
+            fields.append(f"is_active = ${idx}")
+            values.append(is_active)
+            idx += 1
+
+        # important: allow explicit null to unassign project
+        if project_id is not None or project_id is None:
+            fields.append(f"project_id = ${idx}")
+            values.append(project_id)
+            idx += 1
+
         if not fields:
             return await self.get_by_id(service_id)
+
         values.append(service_id)
+
         return await self.conn.fetchrow(
-            f"UPDATE api_services SET {', '.join(fields)} WHERE id = ${idx} RETURNING *",
+            f"""
+            UPDATE api_services
+            SET {', '.join(fields)}
+            WHERE id = ${idx}
+            RETURNING *
+            """,
             *values,
         )
 
     async def delete(self, service_id: UUID) -> bool:
         result = await self.conn.execute(
-            "DELETE FROM api_services WHERE id = $1", service_id
+            "DELETE FROM api_services WHERE id = $1",
+            service_id,
         )
         return result == "DELETE 1"
 
@@ -61,16 +114,27 @@ class ApiServiceRepository:
 
     async def get_endpoints(self, service_id: UUID) -> List[asyncpg.Record]:
         return await self.conn.fetch(
-            "SELECT * FROM endpoints WHERE api_service_id = $1", service_id
+            """
+            SELECT *
+            FROM endpoints
+            WHERE api_service_id = $1
+            ORDER BY method, path
+            """,
+            service_id,
         )
 
     async def get_endpoint_by_id(self, endpoint_id: UUID) -> Optional[asyncpg.Record]:
         return await self.conn.fetchrow(
-            "SELECT * FROM endpoints WHERE id = $1", endpoint_id
+            "SELECT * FROM endpoints WHERE id = $1",
+            endpoint_id,
         )
 
     async def create_endpoint(
-        self, service_id: UUID, path: str, method: str, is_active: bool
+        self,
+        service_id: UUID,
+        path: str,
+        method: str,
+        is_active: bool,
     ) -> asyncpg.Record:
         return await self.conn.fetchrow(
             """
@@ -78,13 +142,25 @@ class ApiServiceRepository:
             VALUES ($1, $2, $3, $4)
             RETURNING *
             """,
-            service_id, path, method, is_active,
+            service_id,
+            path,
+            method,
+            is_active,
         )
 
     async def find_endpoint(
-        self, service_id: UUID, path: str, method: str
+        self,
+        service_id: UUID,
+        path: str,
+        method: str,
     ) -> Optional[asyncpg.Record]:
         return await self.conn.fetchrow(
-            "SELECT * FROM endpoints WHERE api_service_id = $1 AND path = $2 AND method = $3",
-            service_id, path, method,
+            """
+            SELECT *
+            FROM endpoints
+            WHERE api_service_id = $1 AND path = $2 AND method = $3
+            """,
+            service_id,
+            path,
+            method,
         )

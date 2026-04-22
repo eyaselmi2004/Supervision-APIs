@@ -54,18 +54,59 @@ class UserResponse(BaseModel):
 
 
 
+# PROJECT
+
+class ProjectCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=500)
+    icon_key: Optional[str] = Field(None, max_length=50)
+    color: Optional[str] = Field(None, max_length=7)
+    team_id: Optional[UUID] = None 
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=500)
+    icon_key: Optional[str] = Field(None, max_length=50)
+    color: Optional[str] = Field(None, max_length=7)
+
+
+class ProjectResponse(BaseModel):
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    icon_key: Optional[str] = None
+    color: Optional[str] = None
+    owner_id: UUID
+    team_id: Optional[UUID] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ProjectStatsResponse(BaseModel):
+    errors: int
+    transactions: int
+    crash_free_sessions: str
+
+
 # API SERVICE
 
 class ApiServiceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     base_url: str = Field(..., max_length=500)
     is_active: bool = True
+    project_id: Optional[UUID] = None
 
 
 class ApiServiceUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
     base_url: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None
+    project_id: Optional[UUID] = None
 
 
 class ApiServiceResponse(BaseModel):
@@ -74,6 +115,10 @@ class ApiServiceResponse(BaseModel):
     base_url: str
     is_active: bool
     created_at: datetime
+    project_id: Optional[UUID] = None  # ← AJOUTE CETTE LIGNE
+    
+    class Config:
+        from_attributes = True
 
 
 class ApiServiceDetailResponse(ApiServiceResponse):
@@ -198,7 +243,7 @@ class AlertRuleUpdate(BaseModel):
 class AlertRuleResponse(BaseModel):
     id: UUID
     endpoint_id: UUID
-    owner_id: Optional[UUID]
+    owner_id: Optional[UUID] = None
     name: str
     type: RuleType
     threshold: float
@@ -212,13 +257,15 @@ class AlertRuleResponse(BaseModel):
 class AlertResponse(BaseModel):
     id: UUID
     rule_id: UUID
-    managed_by_id: Optional[UUID]
+    managed_by_id: Optional[UUID] = None
     message: str
     severity: Severity
     status: AlertStatus
     created_at: datetime
-    acknowledged_at: Optional[datetime]
-    resolved_at: Optional[datetime]
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    assigned_to_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
 
 
 class AlertAcknowledgeRequest(BaseModel):
@@ -240,12 +287,12 @@ class IncidentResolveRequest(BaseModel):
 class IncidentResponse(BaseModel):
     id: UUID
     api_service_id: UUID
-    source_alert_id: Optional[UUID]
+    source_alert_id: Optional[UUID] = None
     title: str
     start_time: datetime
-    end_time: Optional[datetime]
+    end_time: Optional[datetime] = None
     status: IncidentStatus
-    resolution: Optional[str]
+    resolution: Optional[str] = None
     duration_minutes: Optional[float] = None
 
 
@@ -286,3 +333,40 @@ class HealthResponse(BaseModel):
 
 # Résolution des forward references
 ApiServiceDetailResponse.model_rebuild()
+
+# ── TEAMS ──
+
+class TeamCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=500)
+
+
+class TeamMemberResponse(BaseModel):
+    user_id: UUID
+    name: str
+    email: str
+    role: str  # 'owner' | 'admin' | 'member'
+    joined_at: datetime
+
+
+class TeamResponse(BaseModel):
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    invite_code: str
+    owner_id: UUID
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TeamInvitationResponse(BaseModel):
+    id: UUID
+    team_id: UUID
+    name: str  # team name
+    description: Optional[str] = None  # team description
+    role: str  # 'admin' | 'member'
+    created_at: datetime

@@ -28,7 +28,11 @@ SQL_FILES = [
     "004_hypertable.sql",
     "005_compression.sql",
     "006_continuous_agg.sql",
-     "007_update_role.sql",
+    "007_update_role.sql",
+    "008_notification_channels.sql", 
+    "009_add_projects_table.sql",
+    "010_add_teams_tables.sql",
+    "011_add_team_id_to_projects.sql",
 ]
 
 

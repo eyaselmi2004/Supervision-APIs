@@ -77,3 +77,20 @@ class MetricService:
             }
             for row in rows
         ]
+    async def ingest_from_agent(self, payload) -> None:
+        from app.repositories.api_service_repository import ApiServiceRepository
+        svc_repo = ApiServiceRepository(self.conn)
+        endpoint = await svc_repo.find_endpoint(
+            payload.api_service_id,
+            payload.endpoint_path,
+            payload.method.value,
+        )
+        if not endpoint:
+            return
+        await self.repo.create_bulk([{
+            "endpoint_id": endpoint["id"],
+            "timestamp": payload.timestamp,
+            "response_time_ms": payload.response_time_ms,
+            "status_code": payload.status_code,
+            "success": 200 <= payload.status_code < 400,
+        }])

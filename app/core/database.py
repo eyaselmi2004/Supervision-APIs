@@ -1,5 +1,4 @@
-
-import asyncpg #bibliothèque Python pour se connecter à une base de données PostgreSQL de manière asynchrone(non bloquante)
+import asyncpg
 from loguru import logger
 from app.core.config import settings
 
@@ -23,6 +22,19 @@ async def close_pool() -> None:
     if _pool:
         await _pool.close()
         logger.info("Pool asyncpg fermé ")
+
+
+def get_pool() -> asyncpg.Pool:
+    """
+    Retourne le pool de connexions global.
+    Utilisé par les services qui s'exécutent en arrière-plan
+    avec asyncio.create_task() — ils ne peuvent pas utiliser
+    la connexion injectée par Depends(get_conn) car elle est
+    déjà fermée quand la tâche s'exécute.
+    """
+    if _pool is None:
+        raise RuntimeError("Pool asyncpg non initialisé — démarrez l'application d'abord")
+    return _pool
 
 
 async def get_conn():
