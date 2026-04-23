@@ -1,0 +1,212 @@
+@import "tailwindcss";
+
+/* ── Base ────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+/* ── Dark theme (default) - Deep Blue + Pink Accents ──────────────── */
+:root {
+  --color-background: #0a0e1a;
+  --color-surface: #0f1423;
+  --color-surface-hover: #151b2e;
+  --color-border: #1e293b;
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #94a3b8;
+  --color-text-tertiary: #64748b;
+  --color-primary: #0ea5e9;
+  --color-primary-strong: #0284c7;
+  --color-accent: #ec4899;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+
+  /* Legacy aliases used across app pages */
+  --bg-main: #0a0e1a;
+  --bg-secondary: #0f1423;
+  --bg-card: rgba(26, 33, 64, 0.76);
+  --input-bg: rgba(255, 255, 255, 0.03);
+  --border: #1e293b;
+  --hover-bg: rgba(14, 165, 233, 0.08);
+  --text-primary: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-subtle: #64748b;
+}
+
+/* ── Light theme ────────────────────────── */
+html[data-theme="light"] {
+  --color-background: #ffffff;
+  --color-surface: #f8fafc;
+  --color-surface-hover: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-tertiary: #64748b;
+  --color-primary: #0ea5e9;
+  --color-primary-strong: #0284c7;
+  --color-accent: #ec4899;
+  --color-success: #059669;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+
+  --bg-main: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-card: #ffffff;
+  --input-bg: #f1f5f9;
+  --border: #e2e8f0;
+  --hover-bg: rgba(14, 165, 233, 0.08);
+  --text-primary: #0f172a;
+  --text-muted: #475569;
+  --text-subtle: #64748b;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ───────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+/* ── Skeleton loader ─────────────────────── */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.skeleton {
+  background: var(--background-secondary);
+  border-radius: 0.375rem;
+}
+
+/* ── Clean, professional design without gradients ─────────────────── */
+.landing-shell {
+  position: relative;
+  overflow: hidden;
+  background: #0a0e1a;
+}
+
+.spotlight-layer {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.95;
+  transition: background 0.18s ease-out;
+}
+
+.landing-gradient-text {
+  color: var(--primary-500);
+}
+
+.premium-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1rem;
+  background: rgba(26, 33, 64, 0.76);
+  backdrop-filter: blur(8px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 24px 55px rgba(10, 14, 26, 0.55);
+}
+
+.hero-cockpit-shell {
+  border-radius: 1.3rem 1.3rem 2.2rem 1.1rem;
+  clip-path: polygon(0 0, calc(100% - 34px) 0, 100% 34px, 100% 100%, 0 100%);
+}
+
+.hero-signal-card {
+  border-radius: 1rem 1rem 1.7rem 0.9rem;
+  clip-path: polygon(0 0, calc(100% - 26px) 0, 100% 26px, 100% 100%, 0 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 14px 28px rgba(19, 7, 29, 0.35);
+}
+
+.premium-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(26, 33, 64, 0.72);
+  box-shadow: 0 20px 45px rgba(10, 14, 26, 0.38);
+}
+
+.premium-card:hover {
+  border-color: rgba(14, 165, 233, 0.5);
+  box-shadow: 0 22px 48px rgba(14, 165, 233, 0.15);
+}
+
+.workflow-card {
+  background: rgba(26, 33, 64, 0.76);
+  backdrop-filter: blur(8px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 18px 42px rgba(10, 14, 26, 0.45);
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.workflow-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(14, 165, 233, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 24px 48px rgba(14, 165, 233, 0.2);
+}
+
+@keyframes signalBarPulse {
+  0%,
+  100% {
+    transform: translateY(0);
+    box-shadow: 0 0 0 rgba(244, 114, 182, 0);
+  }
+  50% {
+    transform: translateY(-2px);
+    box-shadow: 0 0 10px rgba(244, 114, 182, 0.45);
+  }
+}
+
+.signal-bar {
+  align-self: end;
+  width: 100%;
+  animation: signalBarPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pulseDot {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+}
+
+.pulse-dot {
+  animation: pulseDot 2s ease-in-out infinite;
+}
