@@ -50,5 +50,10 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = "Supervision APIs"
 
 
+    OLLAMA_BASE_URL: str = "http://178.104.250.151:11434"
+    OLLAMA_MODEL: str = "qwen2.5:3b"
+    OLLAMA_TIMEOUT_SECONDS: int = 120
+
+
 # Instance unique importée partout dans l'application
 settings = Settings()

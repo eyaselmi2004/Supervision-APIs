@@ -221,3 +221,38 @@ export interface ProjectStats {
   transactions: number
   crash_free_sessions: string
 }
+
+
+export interface EndpointDiscoveryResult {
+  message: string
+  service_id: string
+  base_url: string
+  discovered: number
+  created: number
+}
+
+export interface EndpointTestResult {
+  service_id: string
+  endpoint_id: string
+  method: string
+  url: string
+  status_code: number
+  success: boolean
+  response_time_ms: number
+  response_preview: string
+}
+
+export interface ExplainIssueRequest {
+  service_name: string
+  method: string
+  path: string
+  avg_latency_ms: number
+  p95_latency_ms: number
+  error_rate_percent: number
+  total_requests: number
+  response_preview?: string
+}
+
+export interface ExplainIssueResponse {
+  analysis: string
+}

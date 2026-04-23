@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Activity, TrendingUp, AlertCircle, CheckCircle, ExternalLink, Search } from 'lucide-react'
+import {
+  Activity,
+  TrendingUp,
+  AlertCircle,
+  CheckCircle,
+  ExternalLink,
+  Search,
+  Plus,
+  RefreshCw,
+  Wand2,
+  X,
+} from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Layout } from '../components/layout/Layout'
 import { Header } from '../components/layout/Header'
@@ -70,6 +81,20 @@ interface EndpointRow {
   serviceName: string
 }
 
+interface CreateApiForm {
+  name: string
+  base_url: string
+  project_id: string
+  is_active: boolean
+}
+
+const emptyCreateForm: CreateApiForm = {
+  name: '',
+  base_url: '',
+  project_id: '',
+  is_active: true,
+}
+
 export const ApiServicesPage: React.FC = () => {
   const navigate = useNavigate()
   const [services, setServices] = useState<ApiService[]>([])
@@ -79,68 +104,63 @@ export const ApiServicesPage: React.FC = () => {
   const [filterMethod, setFilterMethod] = useState('ALL')
   const [filterStatus, setFilterStatus] = useState('ALL')
 
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [createForm, setCreateForm] = useState<CreateApiForm>(emptyCreateForm)
+  const [createLoading, setCreateLoading] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const servicesData = await apiServicesService.getAll()
+      setServices(servicesData)
+
+      const { start, end } = getLast24h()
+
+      const endpointGroups = await Promise.all(
+        servicesData.map(async (service) => {
+          try {
+            const endpoints = await apiServicesService.getEndpoints(service.id)
+
+            const endpointRows = await Promise.all(
+              endpoints.map(async (endpoint) => {
+                try {
+                  const rawStats = await metricsService.getStats(endpoint.id, start, end)
+                  return {
+                    endpoint,
+                    serviceName: service.name,
+                    stats: normalizeStats(rawStats),
+                  } as EndpointRow
+                } catch {
+                  return {
+                    endpoint,
+                    serviceName: service.name,
+                    stats: null,
+                  } as EndpointRow
+                }
+              }),
+            )
+
+            return endpointRows
+          } catch {
+            return [] as EndpointRow[]
+          }
+        }),
+      )
+
+      setRows(endpointGroups.flat())
+    } catch (e) {
+      console.error('Erreur chargement API services:', e)
+      setServices([])
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
-    let isMounted = true
-
-    const load = async () => {
-      setLoading(true)
-      try {
-        const servicesData = await apiServicesService.getAll()
-        if (!isMounted) return
-        setServices(servicesData)
-
-        const { start, end } = getLast24h()
-
-        const endpointGroups = await Promise.all(
-          servicesData.map(async (service) => {
-            try {
-              const endpoints = await apiServicesService.getEndpoints(service.id)
-
-              const endpointRows = await Promise.all(
-                endpoints.map(async (endpoint) => {
-                  try {
-                    const rawStats = await metricsService.getStats(endpoint.id, start, end)
-                    return {
-                      endpoint,
-                      serviceName: service.name,
-                      stats: normalizeStats(rawStats),
-                    } as EndpointRow
-                  } catch {
-                    return {
-                      endpoint,
-                      serviceName: service.name,
-                      stats: null,
-                    } as EndpointRow
-                  }
-                }),
-              )
-
-              return endpointRows
-            } catch {
-              return [] as EndpointRow[]
-            }
-          }),
-        )
-
-        if (!isMounted) return
-        setRows(endpointGroups.flat())
-      } catch (e) {
-        console.error('Erreur chargement API services:', e)
-        if (!isMounted) return
-        setServices([])
-        setRows([])
-      } finally {
-        if (isMounted) {
-          setLoading(false)
-        }
-      }
-    }
-
     load()
-
-    return () => {
-      isMounted = false
-    }
   }, [])
 
   const totalRequests = rows.reduce((s, r) => s + (r.stats?.total_requests ?? 0), 0)
@@ -176,35 +196,143 @@ export const ApiServicesPage: React.FC = () => {
     fontFamily: 'Sora, sans-serif',
   }
 
+  const modalInputStyle: React.CSSProperties = {
+    padding: '12px 14px',
+    background: 'var(--input-bg)',
+    border: '1px solid var(--border)',
+    borderRadius: '10px',
+    color: 'var(--text-primary)',
+    fontSize: '14px',
+    outline: 'none',
+    fontFamily: 'Sora, sans-serif',
+    width: '100%',
+    boxSizing: 'border-box',
+  }
+
+  const resetCreateForm = () => {
+    setCreateForm(emptyCreateForm)
+    setCreateError(null)
+  }
+
+  const openCreateModal = () => {
+    resetCreateForm()
+    setShowCreateModal(true)
+  }
+
+  const closeCreateModal = () => {
+    setShowCreateModal(false)
+    resetCreateForm()
+  }
+
+  const handleCreateApi = async (discoverAfterCreate = false) => {
+    if (!createForm.name.trim()) {
+      setCreateError('Veuillez saisir un nom d’API.')
+      return
+    }
+
+    if (!createForm.base_url.trim()) {
+      setCreateError('Veuillez saisir une base URL.')
+      return
+    }
+
+    setCreateLoading(true)
+    setCreateError(null)
+    setActionMessage(null)
+
+    try {
+      const created = await apiServicesService.create({
+        name: createForm.name.trim(),
+        base_url: createForm.base_url.trim(),
+        is_active: createForm.is_active,
+        project_id: createForm.project_id.trim() ? createForm.project_id.trim() : null,
+      })
+
+      if (discoverAfterCreate) {
+        const discovery = await apiServicesService.discoverEndpoints(created.id)
+        setActionMessage(
+          `API créée avec succès. ${discovery.created} endpoint(s) ajouté(s) automatiquement.`
+        )
+      } else {
+        setActionMessage('API créée avec succès.')
+      }
+
+      await load()
+      closeCreateModal()
+    } catch (error: any) {
+      console.error('Erreur création API:', error)
+      setCreateError(error?.response?.data?.detail ?? 'Impossible de créer cette API.')
+    } finally {
+      setCreateLoading(false)
+    }
+  }
+
   return (
     <Layout>
       <Header
         title="API Services"
         subtitle="Liste réelle des endpoints supervisés"
         actions={
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '8px 14px',
-              background: 'transparent',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: 600,
-            }}
-          >
-            <Activity size={14} />
-            Refresh
-          </button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={openCreateModal}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 14px',
+                background: '#d946ef',
+                border: 'none',
+                borderRadius: '8px',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 700,
+              }}
+            >
+              <Plus size={14} />
+              Add API
+            </button>
+
+            <button
+              onClick={load}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 14px',
+                background: 'transparent',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+              }}
+            >
+              <Activity size={14} />
+              Refresh
+            </button>
+          </div>
         }
       />
 
       <div style={{ padding: '24px' }}>
+        {actionMessage && (
+          <div
+            style={{
+              marginBottom: '16px',
+              padding: '12px 14px',
+              borderRadius: '10px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card)',
+              color: 'var(--text-primary)',
+              fontSize: '14px',
+            }}
+          >
+            {actionMessage}
+          </div>
+        )}
+
         <div
           style={{
             display: 'grid',
@@ -376,6 +504,183 @@ export const ApiServicesPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {showCreateModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '520px',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: '18px',
+              padding: '22px',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '18px',
+              }}
+            >
+              <div>
+                <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Add API</h3>
+                <p style={{ margin: '6px 0 0 0', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                  Create a monitored API directly from the interface.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeCreateModal}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  API name
+                </label>
+                <input
+                  type="text"
+                  value={createForm.name}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Full Stack FastAPI"
+                  style={modalInputStyle}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  Base URL
+                </label>
+                <input
+                  type="text"
+                  value={createForm.base_url}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, base_url: e.target.value }))}
+                  placeholder="http://localhost:8001"
+                  style={modalInputStyle}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  Project ID (optional)
+                </label>
+                <input
+                  type="text"
+                  value={createForm.project_id}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, project_id: e.target.value }))}
+                  placeholder="Leave empty for now"
+                  style={modalInputStyle}
+                />
+              </div>
+
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={createForm.is_active}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+                />
+                API active
+              </label>
+
+              {createError && (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '10px',
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.25)',
+                    color: '#fca5a5',
+                    fontSize: '13px',
+                  }}
+                >
+                  {createError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => handleCreateApi(false)}
+                  disabled={createLoading}
+                  style={{
+                    flex: 1,
+                    minWidth: '180px',
+                    padding: '12px 16px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg-elevated)',
+                    color: 'var(--text-primary)',
+                    fontWeight: 700,
+                    cursor: createLoading ? 'not-allowed' : 'pointer',
+                    opacity: createLoading ? 0.7 : 1,
+                  }}
+                >
+                  {createLoading ? 'Creating...' : 'Create API'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCreateApi(true)}
+                  disabled={createLoading}
+                  style={{
+                    flex: 1,
+                    minWidth: '180px',
+                    padding: '12px 16px',
+                    borderRadius: '10px',
+                    border: 'none',
+                    background: '#d946ef',
+                    color: '#fff',
+                    fontWeight: 700,
+                    cursor: createLoading ? 'not-allowed' : 'pointer',
+                    opacity: createLoading ? 0.7 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  {createLoading ? <RefreshCw size={16} /> : <Wand2 size={16} />}
+                  {createLoading ? 'Processing...' : 'Create + Discover'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   )
 }

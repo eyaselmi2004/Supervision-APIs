@@ -53,10 +53,11 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
     return _as_utc(parsed)
 
 
-def _db_naive_utc(value: datetime) -> datetime:
+def _db_timestamptz(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
 
 def _resolve_period(
     period_start: Optional[str],
@@ -74,13 +75,16 @@ def _resolve_period(
 
 def _normalize_bucket_interval(bucket_interval: Optional[str]) -> str:
     if not bucket_interval:
-        return "1 hour"
+        return "hour"
 
     cleaned = bucket_interval.strip().lower()
-    if not _ALLOWED_BUCKET.match(cleaned):
-        return "1 hour"
 
-    return cleaned
+    if "minute" in cleaned:
+        return "minute"
+    if "day" in cleaned:
+        return "day"
+
+    return "hour"
 
 
 def _metric_method(value: str) -> str:
@@ -93,7 +97,10 @@ async def receive_metric(
     conn: asyncpg.Connection = Depends(get_conn),
 ):
     """
-    Receive one metric from the supervision middleware.
+    Receive one metric from the supervision middleware and store it
+    in the migration-based schema:
+    - endpoints(api_service_id, path, method, ...)
+    - api_metrics(endpoint_id, timestamp, response_time_ms, status_code, success)
     """
     print("[METRIC] received")
 
@@ -103,78 +110,55 @@ async def receive_metric(
         raise HTTPException(status_code=400, detail="Invalid UUID") from exc
 
     try:
-        api_service = await conn.fetchval(
-            "SELECT id FROM api_services WHERE id = $1",
+        api_service = await conn.fetchrow(
+            """
+            SELECT id
+            FROM api_services
+            WHERE id = $1
+            """,
             api_uuid,
         )
-
         if not api_service:
             raise HTTPException(status_code=404, detail="API Service not found")
 
         method = _metric_method(data.method)
         metric_timestamp = _parse_iso_datetime(data.timestamp) or datetime.now(timezone.utc)
-        metric_timestamp = _db_naive_utc(metric_timestamp)
+        metric_timestamp = _db_timestamptz(metric_timestamp)
+        success = int(data.status_code) < 400
 
-        try:
-            await conn.execute(
-                """
-                INSERT INTO endpoints (id, api_service_id, path, method, is_active, created_at)
-                VALUES (gen_random_uuid(), $1, $2, $3, true, NOW())
-                ON CONFLICT (api_service_id, path, method) DO NOTHING
-                """,
-                api_uuid,
-                data.endpoint_path,
-                method,
-            )
-        except Exception as endpoint_error:
-            print(f"[METRIC] endpoint upsert failed (non-blocking): {endpoint_error}")
-
-        metric_id = await conn.fetchval(
+        endpoint = await conn.fetchrow(
             """
-            INSERT INTO metrics
-                (api_service_id, endpoint_path, method, status_code, response_time_ms, timestamp, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, NOW())
-            RETURNING id
+            INSERT INTO endpoints (api_service_id, path, method, is_active)
+            VALUES ($1, $2, $3, TRUE)
+            ON CONFLICT (api_service_id, path, method)
+            DO UPDATE SET is_active = TRUE
+            RETURNING id, api_service_id, path, method
             """,
             api_uuid,
             data.endpoint_path,
             method,
-            int(data.status_code),
-            float(data.response_time_ms),
-            metric_timestamp,
         )
 
-        severity = None
-        message = ""
+        endpoint_id = endpoint["id"]
 
-        if data.status_code >= 500:
-            severity = "CRITICAL"
-            message = f"Server error ({data.status_code}) on {data.endpoint_path}"
-        elif data.status_code >= 400:
-            severity = "WARNING"
-            message = f"Client error ({data.status_code}) on {data.endpoint_path}"
-        elif data.response_time_ms > 2000:
-            severity = "WARNING"
-            message = f"Slow response ({data.response_time_ms:.2f}ms) on {data.endpoint_path}"
-
-        if severity:
-            try:
-                await conn.execute(
-                    """
-                    INSERT INTO alerts
-                        (api_service_id, message, severity, status, created_at)
-                    VALUES ($1, $2, $3, 'OPEN', NOW())
-                    """,
-                    api_uuid,
-                    message,
-                    severity,
-                )
-            except Exception as alert_error:
-                print(f"[METRIC] alert creation failed (non-blocking): {alert_error}")
+        metric_id = await conn.fetchval(
+            """
+            INSERT INTO api_metrics
+                (endpoint_id, timestamp, response_time_ms, status_code, success)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+            """,
+            endpoint_id,
+            metric_timestamp,
+            float(data.response_time_ms),
+            int(data.status_code),
+            success,
+        )
 
         return {
             "status": "success",
             "metric_id": str(metric_id),
+            "endpoint_id": str(endpoint_id),
             "message": "Metric recorded",
         }
 
@@ -182,10 +166,8 @@ async def receive_metric(
         raise
     except Exception as exc:
         print(f"[METRIC] processing failed: {exc}")
-        return {
-            "status": "ignored",
-            "message": "Metric received but could not be processed",
-        }
+        raise HTTPException(status_code=500, detail=f"Metric ingestion failed: {exc}") from exc
+
 
 @router.get("/api/{api_id}")
 async def get_api_metrics(
@@ -204,10 +186,19 @@ async def get_api_metrics(
     try:
         results = await conn.fetch(
             """
-            SELECT *
-            FROM metrics
-            WHERE api_service_id = $1
-            ORDER BY timestamp DESC
+            SELECT
+                m.id,
+                m.timestamp,
+                m.response_time_ms,
+                m.status_code,
+                m.success,
+                e.id AS endpoint_id,
+                e.path AS endpoint_path,
+                e.method
+            FROM api_metrics m
+            JOIN endpoints e ON e.id = m.endpoint_id
+            WHERE e.api_service_id = $1
+            ORDER BY m.timestamp DESC
             LIMIT $2
             """,
             api_uuid,
@@ -241,13 +232,14 @@ async def get_api_stats(
             """
             SELECT
                 COUNT(*)::BIGINT AS total_requests,
-                AVG(response_time_ms)::DOUBLE PRECISION AS avg_response_time,
-                MAX(response_time_ms)::DOUBLE PRECISION AS max_response_time,
-                MIN(response_time_ms)::DOUBLE PRECISION AS min_response_time,
-                COUNT(*) FILTER (WHERE status_code >= 400)::DOUBLE PRECISION AS error_count
-            FROM metrics
-            WHERE api_service_id = $1
-              AND timestamp > NOW() - INTERVAL '1 hour'
+                AVG(m.response_time_ms)::DOUBLE PRECISION AS avg_response_time,
+                MAX(m.response_time_ms)::DOUBLE PRECISION AS max_response_time,
+                MIN(m.response_time_ms)::DOUBLE PRECISION AS min_response_time,
+                COUNT(*) FILTER (WHERE m.status_code >= 400)::DOUBLE PRECISION AS error_count
+            FROM api_metrics m
+            JOIN endpoints e ON e.id = m.endpoint_id
+            WHERE e.api_service_id = $1
+              AND m.timestamp > NOW() - INTERVAL '1 hour'
             """,
             api_uuid,
         )
@@ -298,17 +290,13 @@ async def get_endpoint_metrics(
 
         rows = await conn.fetch(
             """
-            SELECT id, timestamp, response_time_ms, status_code
-            FROM metrics
-            WHERE api_service_id = $1
-              AND endpoint_path = $2
-              AND method = $3
+            SELECT id, timestamp, response_time_ms, status_code, success
+            FROM api_metrics
+            WHERE endpoint_id = $1
             ORDER BY timestamp DESC
-            LIMIT $4
+            LIMIT $2
             """,
-            endpoint["api_service_id"],
-            endpoint["path"],
-            endpoint["method"],
+            endpoint_uuid,
             limit,
         )
 
@@ -319,7 +307,7 @@ async def get_endpoint_metrics(
                 "timestamp": row["timestamp"],
                 "response_time_ms": float(row["response_time_ms"] or 0.0),
                 "status_code": int(row["status_code"] or 0),
-                "success": int(row["status_code"] or 0) < 400,
+                "success": bool(row["success"]),
             }
             for row in rows
         ]
@@ -359,29 +347,25 @@ async def get_endpoint_stats(
             raise HTTPException(status_code=404, detail="Endpoint not found")
 
         period_start_dt, period_end_dt = _resolve_period(period_start, period_end, default_hours=24)
-        period_start_dt = _db_naive_utc(period_start_dt)
-        period_end_dt = _db_naive_utc(period_end_dt)
+        period_start_dt = _db_timestamptz(period_start_dt)
+        period_end_dt = _db_timestamptz(period_end_dt)
 
         stats = await conn.fetchrow(
             """
             SELECT
                 COUNT(*)::BIGINT AS total_requests,
-                COUNT(*) FILTER (WHERE status_code < 400)::BIGINT AS success_count,
+                COUNT(*) FILTER (WHERE success = TRUE)::BIGINT AS success_count,
                 COUNT(*) FILTER (WHERE status_code >= 400)::BIGINT AS error_count,
                 AVG(response_time_ms)::DOUBLE PRECISION AS avg_response_time_ms,
                 MIN(response_time_ms)::DOUBLE PRECISION AS min_response_time_ms,
                 MAX(response_time_ms)::DOUBLE PRECISION AS max_response_time_ms,
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_time_ms) AS p95_latency_ms
-            FROM metrics
-            WHERE api_service_id = $1
-              AND endpoint_path = $2
-              AND method = $3
-              AND timestamp >= $4
-              AND timestamp <= $5
+            FROM api_metrics
+            WHERE endpoint_id = $1
+              AND timestamp >= $2
+              AND timestamp <= $3
             """,
-            endpoint["api_service_id"],
-            endpoint["path"],
-            endpoint["method"],
+            endpoint_uuid,
             period_start_dt,
             period_end_dt,
         )
@@ -417,6 +401,7 @@ async def get_endpoint_stats(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Unable to compute endpoint stats: {exc}") from exc
 
+
 @router.get("/endpoint/{endpoint_id}/time-series")
 async def get_endpoint_time_series(
     endpoint_id: str,
@@ -447,33 +432,26 @@ async def get_endpoint_time_series(
             raise HTTPException(status_code=404, detail="Endpoint not found")
 
         period_start_dt, period_end_dt = _resolve_period(period_start, period_end, default_hours=24)
-        period_start_dt = _db_naive_utc(period_start_dt)
-        period_end_dt = _db_naive_utc(period_end_dt)
-        bucket = _normalize_bucket_interval(bucket_interval)
+        period_start_dt = _db_timestamptz(period_start_dt)
+        period_end_dt = _db_timestamptz(period_end_dt)
+
+        bucket_unit = _normalize_bucket_interval(bucket_interval)
 
         rows = await conn.fetch(
-            """
+            f"""
             SELECT
-                to_timestamp(
-                    floor(extract(epoch from timestamp) / extract(epoch from $4::interval))
-                    * extract(epoch from $4::interval)
-                ) AS bucket,
+                date_trunc('{bucket_unit}', timestamp) AS bucket,
                 COUNT(*)::BIGINT AS total_requests,
                 AVG(response_time_ms)::DOUBLE PRECISION AS avg_response_time_ms,
                 COUNT(*) FILTER (WHERE status_code >= 400)::BIGINT AS error_count
-            FROM metrics
-            WHERE api_service_id = $1
-              AND endpoint_path = $2
-              AND method = $3
-              AND timestamp >= $5
-              AND timestamp <= $6
-            GROUP BY bucket
-            ORDER BY bucket ASC
+            FROM api_metrics
+            WHERE endpoint_id = $1
+              AND timestamp >= $2
+              AND timestamp <= $3
+            GROUP BY 1
+            ORDER BY 1 ASC
             """,
-            endpoint["api_service_id"],
-            endpoint["path"],
-            endpoint["method"],
-            bucket,
+            endpoint_uuid,
             period_start_dt,
             period_end_dt,
         )
@@ -501,4 +479,5 @@ async def get_endpoint_time_series(
     except HTTPException:
         raise
     except Exception as exc:
+        print(f"[METRIC] time-series failed: {exc}")
         raise HTTPException(status_code=500, detail=f"Unable to compute time series: {exc}") from exc

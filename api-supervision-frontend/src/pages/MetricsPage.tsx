@@ -12,13 +12,32 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { Activity, AlertCircle, Clock, Gauge } from 'lucide-react'
+import {
+  Activity,
+  AlertCircle,
+  Clock,
+  Gauge,
+  Play,
+  RefreshCw,
+  Wand2,
+  KeyRound,
+  X,
+  Sparkles,
+} from 'lucide-react'
 import { Layout } from '../components/layout/Layout'
 import { Header } from '../components/layout/Header'
 import { apiServicesService } from '../services/apiServices.service'
 import { metricsService } from '../services/metrics.service'
+import { llmService } from '../services/llm.service'
 import { useProject } from '../contexts/ProjectContext'
-import type { ApiService, Endpoint, MetricsStats, MetricsTimeSeries } from '../types'
+import type {
+  ApiService,
+  Endpoint,
+  MetricsStats,
+  MetricsTimeSeries,
+  EndpointDiscoveryResult,
+  EndpointTestResult,
+} from '../types'
 
 type PeriodKey = '1h' | '6h' | '24h' | '7d'
 
@@ -164,6 +183,22 @@ export const MetricsPage: React.FC = () => {
   const [metricsLoading, setMetricsLoading] = useState<boolean>(false)
 
   const [metricsError, setMetricsError] = useState<string | null>(null)
+  const [discoverLoading, setDiscoverLoading] = useState(false)
+  const [testLoading, setTestLoading] = useState(false)
+  const [discoverResult, setDiscoverResult] = useState<EndpointDiscoveryResult | null>(null)
+  const [testResult, setTestResult] = useState<EndpointTestResult | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [authUsername, setAuthUsername] = useState('admin@example.com')
+  const [authPassword, setAuthPassword] = useState('changethis')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [monitoredToken, setMonitoredToken] = useState<string>('')
+
+  const [llmLoading, setLlmLoading] = useState(false)
+  const [llmAnalysis, setLlmAnalysis] = useState<string | null>(null)
+  const [llmError, setLlmError] = useState<string | null>(null)
 
   useEffect(() => {
     setBucketInterval(defaultBucketForPeriod(period))
@@ -216,10 +251,10 @@ export const MetricsPage: React.FC = () => {
       setStats(null)
       setTimeSeries([])
       setMetricsError(null)
+      setLlmAnalysis(null)
+      setLlmError(null)
 
-      if (!selectedService) {
-        return
-      }
+      if (!selectedService) return
 
       setEndpointsLoading(true)
       try {
@@ -302,6 +337,163 @@ export const MetricsPage: React.FC = () => {
     }
   }, [selectedEndpoint, period, bucketInterval])
 
+  const monitoredTokenStorageKey = (serviceId: string) => `monitored_api_token:${serviceId}`
+
+  useEffect(() => {
+    if (!selectedService) {
+      setMonitoredToken('')
+      return
+    }
+
+    const savedToken = localStorage.getItem(monitoredTokenStorageKey(selectedService)) ?? ''
+    setMonitoredToken(savedToken)
+  }, [selectedService])
+
+  const reloadEndpointsForService = async (serviceId: string) => {
+    const fetchedEndpoints = await apiServicesService.getEndpoints(serviceId)
+    setEndpoints(fetchedEndpoints)
+
+    if (!fetchedEndpoints.some((ep) => ep.id === selectedEndpoint)) {
+      setSelectedEndpoint(fetchedEndpoints[0]?.id ?? '')
+    }
+  }
+
+  const reloadMetricsForEndpoint = async (endpointId: string) => {
+    const { start, end } = getPeriodRange(period)
+
+    const [statsResponse, seriesResponse] = await Promise.all([
+      metricsService.getStats(endpointId, start, end),
+      metricsService.getTimeSeries(endpointId, start, end, bucketInterval),
+    ])
+
+    setStats(normalizeStats(statsResponse))
+    setTimeSeries(normalizeTimeSeries(seriesResponse))
+  }
+
+  const handleDiscoverEndpoints = async () => {
+    if (!selectedService) return
+
+    setDiscoverLoading(true)
+    setActionMessage(null)
+    setDiscoverResult(null)
+
+    try {
+      const result = await apiServicesService.discoverEndpoints(selectedService)
+      setDiscoverResult(result)
+      setActionMessage(`Découverte terminée : ${result.created} nouvel(s) endpoint(s) ajouté(s).`)
+      await reloadEndpointsForService(selectedService)
+    } catch (error) {
+      console.error('❌ Erreur découverte endpoints:', error)
+      setActionMessage(
+        error instanceof Error ? error.message : 'Impossible de découvrir les endpoints'
+      )
+    } finally {
+      setDiscoverLoading(false)
+    }
+  }
+
+  const handleAuthorize = async () => {
+    if (!selectedService) return
+
+    setAuthLoading(true)
+    setAuthError(null)
+
+    try {
+      const result = await apiServicesService.loginToMonitoredApi(selectedService, {
+        username: authUsername,
+        password: authPassword,
+        login_path: '/api/v1/login/access-token',
+      })
+
+      localStorage.setItem(
+        monitoredTokenStorageKey(selectedService),
+        result.access_token
+      )
+
+      setMonitoredToken(result.access_token)
+      setAuthModalOpen(false)
+      setActionMessage('Authentification réussie sur l’API monitorée.')
+    } catch (error) {
+      console.error('❌ Erreur auth API monitorée:', error)
+      setAuthError(
+        error instanceof Error ? error.message : 'Impossible de se connecter à l’API monitorée'
+      )
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleLogoutMonitoredApi = () => {
+    if (!selectedService) return
+    localStorage.removeItem(monitoredTokenStorageKey(selectedService))
+    setMonitoredToken('')
+    setActionMessage('Token supprimé pour cette API.')
+  }
+
+  const handleTestEndpoint = async () => {
+    if (!selectedService || !selectedEndpoint) return
+
+    setTestLoading(true)
+    setActionMessage(null)
+    setTestResult(null)
+
+    try {
+      const headers: Record<string, string> = {}
+
+      if (monitoredToken) {
+        headers.Authorization = `Bearer ${monitoredToken}`
+      }
+
+      const result = await apiServicesService.testEndpoint(selectedService, selectedEndpoint, {
+        headers,
+      })
+
+      setTestResult(result)
+      setActionMessage(`Test exécuté : ${result.status_code} en ${result.response_time_ms} ms`)
+      await reloadMetricsForEndpoint(selectedEndpoint)
+    } catch (error) {
+      console.error('❌ Erreur test endpoint:', error)
+      setActionMessage(
+        error instanceof Error ? error.message : 'Impossible de tester cet endpoint'
+      )
+    } finally {
+      setTestLoading(false)
+    }
+  }
+
+  const handleExplainIssue = async () => {
+    if (!selectedService || !selectedEndpoint || !stats) return
+
+    const selectedServiceObject = services.find((s) => s.id === selectedService)
+    const selectedEndpointObject = endpoints.find((e) => e.id === selectedEndpoint)
+
+    if (!selectedServiceObject || !selectedEndpointObject) return
+
+    setLlmLoading(true)
+    setLlmError(null)
+    setLlmAnalysis(null)
+
+    try {
+      const result = await llmService.explainIssue({
+        service_name: selectedServiceObject.name,
+        method: selectedEndpointObject.method,
+        path: selectedEndpointObject.path,
+        avg_latency_ms: stats.avg_response_time_ms ?? 0,
+        p95_latency_ms: stats.p95_latency_ms ?? 0,
+        error_rate_percent: stats.error_rate_percent ?? 0,
+        total_requests: stats.total_requests ?? 0,
+        response_preview: testResult?.response_preview ?? '',
+      })
+
+      setLlmAnalysis(result.analysis)
+    } catch (error) {
+      console.error('❌ LLM explain issue error:', error)
+      setLlmError(error instanceof Error ? error.message : 'Impossible de générer une analyse')
+    } finally {
+      setLlmLoading(false)
+    }
+  }
+
   const chartData = useMemo(
     () =>
       timeSeries.map((point) => ({
@@ -334,6 +526,19 @@ export const MetricsPage: React.FC = () => {
     fontWeight: 600,
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
+  }
+
+  const actionButtonStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '10px 14px',
+    borderRadius: '10px',
+    border: '1px solid var(--border)',
+    background: 'var(--bg-card)',
+    color: 'var(--text-primary)',
+    cursor: 'pointer',
+    fontWeight: 600,
   }
 
   const statValues = {
@@ -437,7 +642,207 @@ export const MetricsPage: React.FC = () => {
               <option value="1 day">1 jour</option>
             </select>
           </div>
+
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={handleDiscoverEndpoints}
+              disabled={!selectedService || discoverLoading}
+              style={{
+                ...actionButtonStyle,
+                cursor: !selectedService || discoverLoading ? 'not-allowed' : 'pointer',
+                opacity: !selectedService || discoverLoading ? 0.6 : 1,
+              }}
+            >
+              {discoverLoading ? <RefreshCw size={16} /> : <Wand2 size={16} />}
+              {discoverLoading ? 'Découverte...' : 'Discover endpoints'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTestEndpoint}
+              disabled={!selectedService || !selectedEndpoint || testLoading}
+              style={{
+                ...actionButtonStyle,
+                cursor: !selectedService || !selectedEndpoint || testLoading ? 'not-allowed' : 'pointer',
+                opacity: !selectedService || !selectedEndpoint || testLoading ? 0.6 : 1,
+              }}
+            >
+              {testLoading ? <RefreshCw size={16} /> : <Play size={16} />}
+              {testLoading ? 'Test en cours...' : 'Test selected endpoint'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setAuthError(null)
+                setAuthModalOpen(true)
+              }}
+              disabled={!selectedService}
+              style={{
+                ...actionButtonStyle,
+                cursor: !selectedService ? 'not-allowed' : 'pointer',
+                opacity: !selectedService ? 0.6 : 1,
+              }}
+            >
+              <KeyRound size={16} />
+              {monitoredToken ? 'Authorized' : 'Authorize'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogoutMonitoredApi}
+              disabled={!selectedService || !monitoredToken}
+              style={{
+                ...actionButtonStyle,
+                cursor: !selectedService || !monitoredToken ? 'not-allowed' : 'pointer',
+                opacity: !selectedService || !monitoredToken ? 0.6 : 1,
+              }}
+            >
+              <X size={16} />
+              Clear token
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExplainIssue}
+              disabled={!selectedService || !selectedEndpoint || !stats || llmLoading}
+              style={{
+                ...actionButtonStyle,
+                cursor: !selectedService || !selectedEndpoint || !stats || llmLoading ? 'not-allowed' : 'pointer',
+                opacity: !selectedService || !selectedEndpoint || !stats || llmLoading ? 0.6 : 1,
+              }}
+            >
+              <Sparkles size={16} />
+              {llmLoading ? 'Analyzing...' : 'Explain issue'}
+            </button>
+          </div>
         </div>
+
+        {actionMessage && (
+          <div
+            style={{
+              marginBottom: '16px',
+              padding: '12px 14px',
+              borderRadius: '10px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card)',
+              color: 'var(--text-primary)',
+              fontSize: '14px',
+            }}
+          >
+            {actionMessage}
+          </div>
+        )}
+
+        {discoverResult && (
+          <div
+            style={{
+              marginBottom: '16px',
+              padding: '16px',
+              borderRadius: '12px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card)',
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: '8px' }}>Résultat de la découverte</div>
+            <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              API : {discoverResult.base_url}
+            </div>
+            <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              Endpoints détectés : {discoverResult.discovered}
+            </div>
+            <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              Nouveaux endpoints créés : {discoverResult.created}
+            </div>
+          </div>
+        )}
+
+        {testResult && (
+          <div
+            style={{
+              marginBottom: '16px',
+              padding: '16px',
+              borderRadius: '12px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card)',
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: '8px' }}>Résultat du test</div>
+            <div style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+              {testResult.method} {testResult.url}
+            </div>
+            <div style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+              Status : {testResult.status_code} · Temps : {testResult.response_time_ms} ms
+            </div>
+            <div
+              style={{
+                fontSize: '14px',
+                color: testResult.success ? '#10b981' : '#ef4444',
+                marginBottom: '10px',
+              }}
+            >
+              {testResult.success ? 'Succès' : 'Échec'}
+            </div>
+
+            <div
+              style={{
+                padding: '12px',
+                borderRadius: '10px',
+                background: 'var(--input-bg)',
+                border: '1px solid var(--border)',
+                fontSize: '12px',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                color: 'var(--text-primary)',
+                maxHeight: '220px',
+                overflowY: 'auto',
+              }}
+            >
+              {testResult.response_preview || 'Aucune réponse'}
+            </div>
+          </div>
+        )}
+
+        {llmError && (
+          <div
+            style={{
+              marginBottom: '16px',
+              padding: '12px 14px',
+              borderRadius: '10px',
+              border: '1px solid rgba(239,68,68,0.25)',
+              background: 'rgba(239,68,68,0.08)',
+              color: '#fca5a5',
+              fontSize: '14px',
+            }}
+          >
+            {llmError}
+          </div>
+        )}
+
+        {llmAnalysis && (
+          <div
+            style={{
+              marginBottom: '16px',
+              padding: '16px',
+              borderRadius: '12px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card)',
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: '8px' }}>LLM analysis</div>
+            <div
+              style={{
+                whiteSpace: 'pre-wrap',
+                color: 'var(--text-primary)',
+                fontSize: '14px',
+                lineHeight: 1.6,
+              }}
+            >
+              {llmAnalysis}
+            </div>
+          </div>
+        )}
 
         {metricsError && (
           <div
@@ -467,10 +872,34 @@ export const MetricsPage: React.FC = () => {
             marginBottom: '24px',
           }}
         >
-          <StatMini label="Latence moyenne" value={`${statValues.avg.toFixed(2)} ms`} icon={Clock} color="#e879f9" loading={metricsLoading} />
-          <StatMini label="Latence P95" value={`${statValues.p95.toFixed(2)} ms`} icon={Gauge} color="#8B5CF6" loading={metricsLoading} />
-          <StatMini label="Taux d'erreur" value={`${statValues.errorRate.toFixed(2)} %`} icon={AlertCircle} color={statValues.errorRate > 5 ? '#ef4444' : '#10b981'} loading={metricsLoading} />
-          <StatMini label="Total requetes" value={statValues.total.toLocaleString('fr-FR')} icon={Activity} color="#10b981" loading={metricsLoading} />
+          <StatMini
+            label="Latence moyenne"
+            value={`${statValues.avg.toFixed(2)} ms`}
+            icon={Clock}
+            color="#e879f9"
+            loading={metricsLoading}
+          />
+          <StatMini
+            label="Latence P95"
+            value={`${statValues.p95.toFixed(2)} ms`}
+            icon={Gauge}
+            color="#8B5CF6"
+            loading={metricsLoading}
+          />
+          <StatMini
+            label="Taux d'erreur"
+            value={`${statValues.errorRate.toFixed(2)} %`}
+            icon={AlertCircle}
+            color={statValues.errorRate > 5 ? '#ef4444' : '#10b981'}
+            loading={metricsLoading}
+          />
+          <StatMini
+            label="Total requetes"
+            value={statValues.total.toLocaleString('fr-FR')}
+            icon={Activity}
+            color="#10b981"
+            loading={metricsLoading}
+          />
         </div>
 
         <div
@@ -489,11 +918,29 @@ export const MetricsPage: React.FC = () => {
           {metricsLoading ? (
             <div className="skeleton" style={{ height: '240px', borderRadius: '8px' }} />
           ) : !selectedEndpoint ? (
-            <div style={{ height: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-subtle)', fontSize: '13px' }}>
+            <div
+              style={{
+                height: '240px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-subtle)',
+                fontSize: '13px',
+              }}
+            >
               Selectionnez un endpoint
             </div>
           ) : !hasData ? (
-            <div style={{ height: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-subtle)', fontSize: '13px' }}>
+            <div
+              style={{
+                height: '240px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-subtle)',
+                fontSize: '13px',
+              }}
+            >
               Aucune donnee pour cette periode
             </div>
           ) : (
@@ -525,11 +972,29 @@ export const MetricsPage: React.FC = () => {
           {metricsLoading ? (
             <div className="skeleton" style={{ height: '240px', borderRadius: '8px' }} />
           ) : !selectedEndpoint ? (
-            <div style={{ height: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-subtle)', fontSize: '13px' }}>
+            <div
+              style={{
+                height: '240px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-subtle)',
+                fontSize: '13px',
+              }}
+            >
               Selectionnez un endpoint
             </div>
           ) : !hasData ? (
-            <div style={{ height: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-subtle)', fontSize: '13px' }}>
+            <div
+              style={{
+                height: '240px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-subtle)',
+                fontSize: '13px',
+              }}
+            >
               Aucune donnee pour cette periode
             </div>
           ) : (
@@ -546,6 +1011,118 @@ export const MetricsPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {authModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '420px',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: '16px',
+              padding: '20px',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Authorize monitored API</h3>
+              <button
+                type="button"
+                onClick={() => setAuthModalOpen(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={{ marginTop: 0, marginBottom: '14px', color: 'var(--text-secondary)', fontSize: '14px' }}>
+              Connect to the monitored app like Swagger, then reuse its Bearer token for endpoint tests.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input
+                type="text"
+                placeholder="Username / Email"
+                value={authUsername}
+                onChange={(e) => setAuthUsername(e.target.value)}
+                style={{
+                  padding: '12px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--border)',
+                  background: 'var(--input-bg)',
+                  color: 'var(--text-primary)',
+                  outline: 'none',
+                }}
+              />
+
+              <input
+                type="password"
+                placeholder="Password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                style={{
+                  padding: '12px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--border)',
+                  background: 'var(--input-bg)',
+                  color: 'var(--text-primary)',
+                  outline: 'none',
+                }}
+              />
+
+              {authError && (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '10px',
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.25)',
+                    color: '#fca5a5',
+                    fontSize: '13px',
+                  }}
+                >
+                  {authError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleAuthorize}
+                disabled={authLoading || !authUsername || !authPassword}
+                style={{
+                  padding: '12px 16px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  background: '#d946ef',
+                  color: '#fff',
+                  fontWeight: 700,
+                  cursor: authLoading ? 'not-allowed' : 'pointer',
+                  opacity: authLoading ? 0.7 : 1,
+                }}
+              >
+                {authLoading ? 'Authenticating...' : 'Authorize'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   )
 }

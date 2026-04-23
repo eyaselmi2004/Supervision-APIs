@@ -370,3 +370,29 @@ class TeamInvitationResponse(BaseModel):
     description: Optional[str] = None  # team description
     role: str  # 'admin' | 'member'
     created_at: datetime
+
+
+class MonitoredApiLoginRequest(BaseModel):
+    username: str
+    password: str
+    login_path: Optional[str] = "/api/v1/login/access-token"
+
+
+class MonitoredApiLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class ExplainIssueRequest(BaseModel):
+    service_name: str
+    method: str
+    path: str
+    avg_latency_ms: float
+    p95_latency_ms: float
+    error_rate_percent: float
+    total_requests: int
+    response_preview: Optional[str] = None
+
+
+class ExplainIssueResponse(BaseModel):
+    analysis: str
