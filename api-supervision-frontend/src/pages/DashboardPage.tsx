@@ -10,6 +10,8 @@ import {
   TrendingDown,
   ChevronRight,
   Gauge,
+  Clock,
+  FolderOpen,
 } from 'lucide-react'
 import { Layout } from '../components/layout/Layout'
 import { Header } from '../components/layout/Header'
@@ -44,6 +46,25 @@ interface DashboardAlert {
   created_at: string
 }
 
+interface DashboardIncident {
+  id: string
+  api_service_id: string
+  title: string
+  status: string
+  start_time: string
+  end_time?: string | null
+}
+
+interface LiveActivityItem {
+  id: string
+  type: 'alert' | 'incident'
+  title: string
+  subtitle: string
+  status: string
+  date: string
+  color: string
+}
+
 interface EndpointMetricsRow {
   endpoint_id: string
   api_service_id: string
@@ -72,23 +93,14 @@ const getLast24hRange = (): { start: string; end: string } => {
   return { start: start.toISOString(), end: end.toISOString() }
 }
 
-const normalizeMetricsStats = (raw: MetricsStats): {
-  total_requests: number
-  error_count: number
-  avg_response_time_ms: number
-  error_rate_percent: number
-} => {
+const normalizeMetricsStats = (raw: MetricsStats) => {
   const source = raw as MetricsStatsExtended
-  const totalRequests = Math.max(0, Math.round(safeNumber(source.total_requests)))
-  const errorCount = Math.max(0, Math.round(safeNumber(source.error_count)))
-  const avgResponse = safeNumber(source.avg_response_time_ms ?? source.avg_response_time)
-  const errorRate = safeNumber(source.error_rate_percent ?? source.error_rate)
 
   return {
-    total_requests: totalRequests,
-    error_count: errorCount,
-    avg_response_time_ms: avgResponse,
-    error_rate_percent: errorRate,
+    total_requests: Math.max(0, Math.round(safeNumber(source.total_requests))),
+    error_count: Math.max(0, Math.round(safeNumber(source.error_count))),
+    avg_response_time_ms: safeNumber(source.avg_response_time_ms ?? source.avg_response_time),
+    error_rate_percent: safeNumber(source.error_rate_percent ?? source.error_rate),
   }
 }
 
@@ -134,7 +146,9 @@ export const DashboardPage: React.FC = () => {
     total_requests_24h: 0,
     global_health_score: 0,
   })
+
   const [alerts, setAlerts] = useState<DashboardAlert[]>([])
+  const [liveActivities, setLiveActivities] = useState<LiveActivityItem[]>([])
   const [slowEndpoints, setSlowEndpoints] = useState<EndpointMetricsRow[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [alertFilter, setAlertFilter] = useState<AlertFilter>('all')
@@ -145,21 +159,47 @@ export const DashboardPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject?.id])
 
+  const resetDashboard = () => {
+    setStats({
+      monitored_apis: 0,
+      active_alerts: 0,
+      total_requests_24h: 0,
+      global_health_score: 0,
+    })
+    setAlerts([])
+    setLiveActivities([])
+    setSlowEndpoints([])
+  }
+
   const loadDashboard = async () => {
     setLoading(true)
     setDashboardError(null)
 
-    try {
-      const servicesResponse = selectedProject?.id
-        ? await apiServicesService.getByProject(selectedProject.id)
-        : await apiServicesService.getAll()
+    if (!selectedProject?.id) {
+      resetDashboard()
+      setLoading(false)
+      return
+    }
 
+    try {
+      const servicesResponse = await apiServicesService.getByProject(selectedProject.id)
       const services = (Array.isArray(servicesResponse) ? servicesResponse : []) as ApiService[]
+      const serviceIds = new Set(services.map((service) => service.id))
 
       const alertsResponse = await api.get<DashboardAlert[]>('/alerts', {
-        params: { limit: 100 },
+        params: {
+          project_id: selectedProject.id,
+          limit: 100,
+        },
       })
+
+      const incidentsResponse = await api.get<DashboardIncident[]>('/incidents')
+
       const alertsData = Array.isArray(alertsResponse.data) ? alertsResponse.data : []
+
+      const incidentsData = Array.isArray(incidentsResponse.data)
+        ? incidentsResponse.data.filter((incident) => serviceIds.has(incident.api_service_id))
+        : []
 
       const endpointGroups = await Promise.all(
         services.map(async (service) => {
@@ -210,19 +250,46 @@ export const DashboardPage: React.FC = () => {
 
       const totalRequests = endpointMetrics.reduce((sum, row) => sum + row.total_requests, 0)
       const totalErrors = endpointMetrics.reduce((sum, row) => sum + row.error_count, 0)
-      const weightedLatency = totalRequests > 0
-        ? endpointMetrics.reduce((sum, row) => sum + row.avg_response_time_ms * row.total_requests, 0) / totalRequests
-        : 0
 
-      const activeAlerts = alertsData.filter((alert) => alert?.status === 'OPEN').length
+      const weightedLatency =
+        totalRequests > 0
+          ? endpointMetrics.reduce(
+              (sum, row) => sum + row.avg_response_time_ms * row.total_requests,
+              0,
+            ) / totalRequests
+          : 0
+
+      const activeAlerts = alertsData.filter((alert) => alert.status === 'OPEN').length
       const globalErrorRate = totalRequests > 0 ? (totalErrors / totalRequests) * 100 : 0
       const healthScore = calculateHealthScore(globalErrorRate, weightedLatency, activeAlerts)
 
-      const sortedAlerts = [...alertsData].sort((a, b) => {
-        const left = new Date(b.created_at).getTime()
-        const right = new Date(a.created_at).getTime()
-        return left - right
-      })
+      const sortedAlerts = [...alertsData].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )
+
+      const alertActivities: LiveActivityItem[] = sortedAlerts.slice(0, 5).map((alert) => ({
+        id: `alert-${alert.id}`,
+        type: 'alert',
+        title: alert.status === 'RESOLVED' ? 'Alert resolved' : 'Alert opened',
+        subtitle: alert.message || 'Alert without message',
+        status: alert.status,
+        date: alert.created_at,
+        color: alert.severity === 'CRITICAL' ? '#ef4444' : '#f59e0b',
+      }))
+
+      const incidentActivities: LiveActivityItem[] = incidentsData.slice(0, 5).map((incident) => ({
+        id: `incident-${incident.id}`,
+        type: 'incident',
+        title: incident.status === 'RESOLVED' ? 'Incident resolved' : 'Incident opened',
+        subtitle: incident.title || 'Incident without title',
+        status: incident.status,
+        date: incident.end_time || incident.start_time,
+        color: incident.status === 'RESOLVED' ? '#10b981' : '#ef4444',
+      }))
+
+      const activities = [...alertActivities, ...incidentActivities]
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 6)
 
       const topSlowest = endpointMetrics
         .filter((row) => row.total_requests > 0)
@@ -235,21 +302,15 @@ export const DashboardPage: React.FC = () => {
         total_requests_24h: totalRequests,
         global_health_score: healthScore,
       })
+
       setAlerts(sortedAlerts)
+      setLiveActivities(activities)
       setSlowEndpoints(topSlowest)
     } catch (error) {
-      setStats({
-        monitored_apis: 0,
-        active_alerts: 0,
-        total_requests_24h: 0,
-        global_health_score: 0,
-      })
-      setAlerts([])
-      setSlowEndpoints([])
+      resetDashboard()
 
-      const message = error instanceof Error
-        ? error.message
-        : 'Impossible de charger les donnees du dashboard'
+      const message =
+        error instanceof Error ? error.message : 'Impossible de charger les données du dashboard'
 
       setDashboardError(message)
     } finally {
@@ -276,11 +337,12 @@ export const DashboardPage: React.FC = () => {
     resolved: alerts.filter((alert) => alert.status === 'RESOLVED').length,
   }
 
-  const healthColor = stats.global_health_score >= 90
-    ? '#10b981'
-    : stats.global_health_score >= 70
-      ? '#f59e0b'
-      : '#ef4444'
+  const healthColor =
+    stats.global_health_score >= 90
+      ? '#10b981'
+      : stats.global_health_score >= 70
+        ? '#f59e0b'
+        : '#ef4444'
 
   const CarteKpi = ({
     label,
@@ -316,16 +378,6 @@ export const DashboardPage: React.FC = () => {
         position: 'relative',
         overflow: 'hidden',
       }}
-      onMouseEnter={(event) => {
-        if (onClick) {
-          event.currentTarget.style.transform = 'translateY(-2px)'
-          event.currentTarget.style.boxShadow = `0 8px 24px ${bg}`
-        }
-      }}
-      onMouseLeave={(event) => {
-        event.currentTarget.style.transform = 'translateY(0)'
-        event.currentTarget.style.boxShadow = 'none'
-      }}
     >
       <div
         style={{
@@ -335,9 +387,9 @@ export const DashboardPage: React.FC = () => {
           bottom: 0,
           width: '3px',
           background: color,
-          borderRadius: '12px 0 0 12px',
         }}
       />
+
       <div
         style={{
           width: '44px',
@@ -353,6 +405,7 @@ export const DashboardPage: React.FC = () => {
       >
         <Icon size={20} color={color} />
       </div>
+
       <div style={{ flex: 1, minWidth: 0 }}>
         <p
           style={{
@@ -367,6 +420,7 @@ export const DashboardPage: React.FC = () => {
         >
           {label}
         </p>
+
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
           <p
             style={{
@@ -380,11 +434,13 @@ export const DashboardPage: React.FC = () => {
           >
             {loading ? '-' : value}
           </p>
+
           {trend === 'up' && <TrendingUp size={14} color="#ef4444" />}
           {trend === 'down' && <TrendingDown size={14} color="#10b981" />}
         </div>
       </div>
-      {onClick && <ChevronRight size={16} color="var(--text-subtle)" style={{ flexShrink: 0 }} />}
+
+      {onClick && <ChevronRight size={16} color="var(--text-subtle)" />}
     </div>
   )
 
@@ -392,410 +448,493 @@ export const DashboardPage: React.FC = () => {
     <Layout>
       <Header
         title="Dashboard"
-        subtitle={selectedProject ? `Project: ${selectedProject.name}` : 'Real-time performance overview'}
-        actions={(
-          <button
-            onClick={loadDashboard}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-transparent border border-[var(--color-border)] rounded-md text-[var(--color-text-secondary)] text-xs font-semibold cursor-pointer transition-all duration-150 hover:border-primary-500 hover:text-primary-500"
-          >
-            <Activity size={13} /> Refresh
-          </button>
-        )}
+        subtitle={
+          selectedProject
+            ? `Vue temps réel du projet : ${selectedProject.name}`
+            : 'Sélectionnez un projet pour afficher son dashboard'
+        }
+        actions={
+          selectedProject ? (
+            <button
+              onClick={loadDashboard}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-transparent border border-[var(--border)] rounded-md text-[var(--text-muted)] text-xs font-semibold cursor-pointer"
+            >
+              <Activity size={13} /> Refresh
+            </button>
+          ) : undefined
+        }
       />
 
       <div className="p-7">
-        <div className="p-4 mb-6 bg-primary-500/10 border border-primary-500/20 rounded-lg">
-          <p className="m-0 text-sm font-semibold text-primary-300">Welcome, {user?.name || 'User'}</p>
-          <p className="m-0 mt-0.5 text-xs text-[var(--color-text-tertiary)]">
-            Logged in as{' '}
-            <span className="text-success-400 font-semibold">{user?.role || 'DEVOPS'}</span>
-            {' '} - {new Date().toLocaleDateString('en-US', {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long',
-              year: 'numeric',
-            })}
-          </p>
-        </div>
-
-        {dashboardError && (
+        {!selectedProject ? (
           <div
             style={{
-              marginBottom: '16px',
-              padding: '12px 14px',
-              borderRadius: '10px',
-              border: '1px solid rgba(239,68,68,0.25)',
-              background: 'rgba(239,68,68,0.08)',
-              color: '#fca5a5',
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: '16px',
+              padding: '60px 24px',
+              textAlign: 'center',
             }}
           >
-            <AlertTriangle size={14} />
-            {dashboardError}
-          </div>
-        )}
+            <FolderOpen size={42} color="var(--text-subtle)" style={{ marginBottom: '14px' }} />
 
-        <div className="grid grid-cols-4 gap-4 mb-7">
-          <CarteKpi
-            label="Global Health"
-            value={`${stats.global_health_score.toFixed(1)}%`}
-            icon={Shield}
-            color={healthColor}
-            bg="rgba(16,185,129,0.10)"
-            border="rgba(16,185,129,0.2)"
-            onClick={() => navigate('/metrics')}
-            trend={stats.global_health_score >= 90 ? 'down' : 'up'}
-          />
-          <CarteKpi
-            label="Active Alerts"
-            value={stats.active_alerts}
-            icon={AlertTriangle}
-            color={stats.active_alerts > 0 ? '#ef4444' : '#10b981'}
-            bg={stats.active_alerts > 0 ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)'}
-            border={stats.active_alerts > 0 ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)'}
-            onClick={() => navigate('/alerts')}
-            trend={stats.active_alerts > 0 ? 'up' : null}
-          />
-          <CarteKpi
-            label="Requests (24h)"
-            value={stats.total_requests_24h.toLocaleString('fr-FR')}
-            icon={Activity}
-            color="#d946ef"
-            bg="rgba(217,70,239,0.10)"
-            border="rgba(217,70,239,0.2)"
-            onClick={() => navigate('/metrics')}
-          />
-          <CarteKpi
-            label="Monitored APIs"
-            value={stats.monitored_apis}
-            icon={Globe}
-            color="#0369a1"
-            bg="rgba(3,105,161,0.08)"
-            border="rgba(3,105,161,0.15)"
-            onClick={() => navigate('/api-services')}
-          />
-        </div>
+            <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-primary)' }}>
+              Aucun projet sélectionné
+            </h2>
 
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl overflow-hidden mb-5">
-          <div className="px-5 py-4 border-b border-[var(--color-border)] flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-md bg-danger-500/10 border border-danger-500/20 flex items-center justify-center">
-                <AlertTriangle size={14} className="text-danger-500" />
-              </div>
-              <div>
-                <p className="m-0 text-sm font-semibold text-[var(--color-text-primary)]">Recent Alerts</p>
-                <p className="m-0 text-xs text-[var(--color-text-tertiary)]">Last 5 alerts</p>
-              </div>
-            </div>
-
-            {[
-              { key: 'all' as const, label: 'All Alerts', count: alertCounts.all },
-              { key: 'open' as const, label: 'Open', count: alertCounts.open },
-              { key: 'acknowledged' as const, label: 'In Progress', count: alertCounts.acknowledged },
-              { key: 'resolved' as const, label: 'Resolved', count: alertCounts.resolved },
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => setAlertFilter(tab.key)}
-                className={`flex items-center gap-1.5 px-3 py-2 pb-3 bg-transparent border-none border-b-2 text-sm font-medium cursor-pointer transition-all duration-150 ${
-                  alertFilter === tab.key
-                    ? 'border-primary-500 text-primary-500'
-                    : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-                }`}
-              >
-                {tab.label}
-                <span
-                  className={`inline-flex items-center justify-center min-w-[20px] h-[18px] px-1 rounded-lg text-xs font-semibold ${
-                    alertFilter === tab.key
-                      ? 'bg-primary-500/15 text-primary-500'
-                      : 'bg-gray-500/10 text-[var(--color-text-tertiary)]'
-                  }`}
-                >
-                  {tab.count}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          <div>
-            <div
+            <p
               style={{
-                display: 'grid',
-                gridTemplateColumns: '120px 1fr 120px 150px 90px',
-                padding: '12px 20px',
-                borderBottom: '1px solid var(--border)',
-                background: 'var(--bg-secondary)',
+                margin: '10px auto 24px',
+                maxWidth: '520px',
+                color: 'var(--text-subtle)',
+                fontSize: '14px',
+                lineHeight: 1.7,
               }}
             >
-              {['Severity', 'Message', 'Status', 'Date', 'Action'].map((header) => (
-                <span
-                  key={header}
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    color: 'var(--text-subtle)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                  }}
-                >
-                  {header}
-                </span>
-              ))}
+              Ce dashboard affiche uniquement les métriques, alertes et incidents liés au projet
+              dont vous faites partie. Sélectionnez un projet ou rejoignez une équipe.
+            </p>
+
+            <button
+              onClick={() => navigate('/projects')}
+              style={{
+                padding: '10px 16px',
+                borderRadius: '10px',
+                border: '1px solid var(--border)',
+                background: 'var(--pink-mid)',
+                color: '#fff',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              Aller aux projets
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="p-4 mb-6 bg-primary-500/10 border border-primary-500/20 rounded-lg">
+              <p className="m-0 text-sm font-semibold text-primary-300">
+                Welcome, {user?.name || 'User'}
+              </p>
+              <p className="m-0 mt-0.5 text-xs text-[var(--text-subtle)]">
+                Projet actif : <span style={{ color: 'var(--pink)', fontWeight: 700 }}>{selectedProject.name}</span>
+              </p>
             </div>
 
-            {loading ? (
-              <div style={{ padding: '16px' }}>
-                {[...Array(5)].map((_, index) => (
-                  <div
-                    key={index}
-                    className="skeleton"
-                    style={{ height: '48px', marginBottom: '8px', borderRadius: '6px' }}
-                  />
+            {dashboardError && (
+              <div
+                style={{
+                  marginBottom: '16px',
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(239,68,68,0.25)',
+                  background: 'rgba(239,68,68,0.08)',
+                  color: '#fca5a5',
+                  fontSize: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <AlertTriangle size={14} />
+                {dashboardError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-4 gap-4 mb-7">
+              <CarteKpi
+                label="Global Health"
+                value={`${stats.global_health_score.toFixed(1)}%`}
+                icon={Shield}
+                color={healthColor}
+                bg="rgba(16,185,129,0.10)"
+                border="rgba(16,185,129,0.2)"
+                onClick={() => navigate('/metrics')}
+                trend={stats.global_health_score >= 90 ? 'down' : 'up'}
+              />
+
+              <CarteKpi
+                label="Active Alerts"
+                value={stats.active_alerts}
+                icon={AlertTriangle}
+                color={stats.active_alerts > 0 ? '#ef4444' : '#10b981'}
+                bg={stats.active_alerts > 0 ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)'}
+                border={stats.active_alerts > 0 ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)'}
+                onClick={() => navigate('/alerts')}
+                trend={stats.active_alerts > 0 ? 'up' : null}
+              />
+
+              <CarteKpi
+                label="Requests (24h)"
+                value={stats.total_requests_24h.toLocaleString('fr-FR')}
+                icon={Activity}
+                color="#d946ef"
+                bg="rgba(217,70,239,0.10)"
+                border="rgba(217,70,239,0.2)"
+                onClick={() => navigate('/metrics')}
+              />
+
+              <CarteKpi
+                label="Monitored APIs"
+                value={stats.monitored_apis}
+                icon={Globe}
+                color="#0369a1"
+                bg="rgba(3,105,161,0.08)"
+                border="rgba(3,105,161,0.15)"
+                onClick={() => navigate(`/projects/${selectedProject.id}`)}
+              />
+            </div>
+
+            <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl overflow-hidden mb-5">
+              <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <Clock size={16} color="var(--pink)" />
+                  <div>
+                    <p className="m-0 text-sm font-semibold text-[var(--text-primary)]">Live Activity</p>
+                    <p className="m-0 text-xs text-[var(--text-subtle)]">Activité récente du projet</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={loadDashboard}
+                  className="text-xs font-semibold text-primary-500 bg-transparent border-none cursor-pointer"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {loading ? (
+                <div style={{ padding: '16px' }}>
+                  {[...Array(4)].map((_, index) => (
+                    <div
+                      key={index}
+                      className="skeleton"
+                      style={{ height: '46px', marginBottom: '8px', borderRadius: '8px' }}
+                    />
+                  ))}
+                </div>
+              ) : liveActivities.length === 0 ? (
+                <div style={{ padding: '32px', textAlign: 'center' }}>
+                  <CheckCircle size={24} color="#10b981" style={{ marginBottom: '8px' }} />
+                  <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-subtle)' }}>
+                    Aucune activité récente pour ce projet
+                  </p>
+                </div>
+              ) : (
+                <div style={{ padding: '8px 20px' }}>
+                  {liveActivities.map((activity, index) => (
+                    <div
+                      key={activity.id}
+                      onClick={() => navigate(activity.type === 'alert' ? '/alerts' : '/incidents')}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '28px 1fr 120px',
+                        gap: '12px',
+                        alignItems: 'center',
+                        padding: '12px 0',
+                        borderBottom: index < liveActivities.length - 1 ? '1px solid var(--border)' : 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: '10px',
+                          height: '10px',
+                          borderRadius: '999px',
+                          background: activity.color,
+                          boxShadow: `0 0 0 4px ${activity.color}20`,
+                          justifySelf: 'center',
+                        }}
+                      />
+
+                      <div style={{ minWidth: 0 }}>
+                        <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                          {activity.title}
+                        </p>
+                        <p
+                          style={{
+                            margin: '3px 0 0',
+                            fontSize: '12px',
+                            color: 'var(--text-subtle)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {activity.subtitle}
+                        </p>
+                      </div>
+
+                      <span style={{ fontSize: '12px', color: 'var(--text-subtle)', textAlign: 'right' }}>
+                        {formatAlertTime(activity.date)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl overflow-hidden mb-5">
+              <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <AlertTriangle size={16} color="var(--pink)" />
+                  <div>
+                    <p className="m-0 text-sm font-semibold text-[var(--text-primary)]">Recent Alerts</p>
+                    <p className="m-0 text-xs text-[var(--text-subtle)]">Dernières alertes du projet</p>
+                  </div>
+                </div>
+
+                {[
+                  { key: 'all' as const, label: 'All Alerts', count: alertCounts.all },
+                  { key: 'open' as const, label: 'Open', count: alertCounts.open },
+                  { key: 'acknowledged' as const, label: 'In Progress', count: alertCounts.acknowledged },
+                  { key: 'resolved' as const, label: 'Resolved', count: alertCounts.resolved },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setAlertFilter(tab.key)}
+                    className={`flex items-center gap-1.5 px-3 py-2 bg-transparent border-none text-sm font-medium cursor-pointer ${
+                      alertFilter === tab.key ? 'text-primary-500' : 'text-[var(--text-muted)]'
+                    }`}
+                  >
+                    {tab.label}
+                    <span>{tab.count}</span>
+                  </button>
                 ))}
               </div>
-            ) : filteredRecentAlerts.length === 0 ? (
-              <div style={{ padding: '40px', textAlign: 'center' }}>
-                <CheckCircle size={24} color="#10b981" style={{ marginBottom: '8px' }} />
-                <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-subtle)' }}>
-                  Aucune alerte pour ce filtre
-                </p>
-              </div>
-            ) : (
-              filteredRecentAlerts.map((alert, index) => (
+
+              <div>
                 <div
-                  key={alert.id}
                   style={{
                     display: 'grid',
                     gridTemplateColumns: '120px 1fr 120px 150px 90px',
-                    padding: '14px 20px',
-                    borderBottom: index < filteredRecentAlerts.length - 1 ? '1px solid var(--border)' : 'none',
-                    alignItems: 'center',
-                    transition: 'background 0.15s',
-                    cursor: 'pointer',
+                    padding: '12px 20px',
+                    borderBottom: '1px solid var(--border)',
+                    background: 'var(--bg-secondary)',
                   }}
-                  onMouseEnter={(event) => {
-                    event.currentTarget.style.background = 'rgba(255,255,255,0.02)'
-                  }}
-                  onMouseLeave={(event) => {
-                    event.currentTarget.style.background = 'transparent'
-                  }}
-                  onClick={() => navigate('/alerts')}
                 >
-                  <div>
-                    <AlertSeverityBadge severity={alert.severity || 'INFO'} />
-                  </div>
-
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: '13px',
-                      color: 'var(--text-primary)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      paddingRight: '16px',
-                    }}
-                  >
-                    {alert.message || 'Alerte sans message'}
-                  </p>
-
-                  <div>
-                    <StatusBadgeWithDot
-                      status={mapStatusToBadge(alert.status || 'OPEN')}
-                      animated={alert.status === 'OPEN'}
-                    />
-                  </div>
-
-                  <span style={{ fontSize: '12px', color: 'var(--text-subtle)' }}>
-                    {formatAlertTime(alert.created_at)}
-                  </span>
-
-                  <button
-                    style={{
-                      width: '36px',
-                      height: '28px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--border)',
-                      background: 'transparent',
-                      color: 'var(--text-subtle)',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer',
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      navigate('/alerts')
-                    }}
-                  >
-                    <ChevronRight size={14} />
-                  </button>
+                  {['Severity', 'Message', 'Status', 'Date', 'Action'].map((header) => (
+                    <span
+                      key={header}
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: 'var(--text-subtle)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                      }}
+                    >
+                      {header}
+                    </span>
+                  ))}
                 </div>
-              ))
-            )}
-          </div>
-        </div>
 
-        <div
-          style={{
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border)',
-            borderRadius: '12px',
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{
-              padding: '16px 20px',
-              borderBottom: '1px solid var(--border)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div
-                style={{
-                  width: '28px',
-                  height: '28px',
-                  borderRadius: '7px',
-                  background: 'rgba(139,92,246,0.1)',
-                  border: '1px solid rgba(139,92,246,0.2)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <Gauge size={14} color="#8B5CF6" />
-              </div>
-              <div>
-                <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  Top 5 slowest endpoints
-                </p>
-                <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-subtle)' }}>
-                  Average response time over the last 24h
-                </p>
+                {loading ? (
+                  <div style={{ padding: '16px' }}>
+                    {[...Array(5)].map((_, index) => (
+                      <div
+                        key={index}
+                        className="skeleton"
+                        style={{ height: '48px', marginBottom: '8px', borderRadius: '6px' }}
+                      />
+                    ))}
+                  </div>
+                ) : filteredRecentAlerts.length === 0 ? (
+                  <div style={{ padding: '40px', textAlign: 'center' }}>
+                    <CheckCircle size={24} color="#10b981" style={{ marginBottom: '8px' }} />
+                    <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-subtle)' }}>
+                      Aucune alerte pour ce projet
+                    </p>
+                  </div>
+                ) : (
+                  filteredRecentAlerts.map((alert, index) => (
+                    <div
+                      key={alert.id}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '120px 1fr 120px 150px 90px',
+                        padding: '14px 20px',
+                        borderBottom: index < filteredRecentAlerts.length - 1 ? '1px solid var(--border)' : 'none',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => navigate('/alerts')}
+                    >
+                      <AlertSeverityBadge severity={alert.severity || 'INFO'} />
+
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: '13px',
+                          color: 'var(--text-primary)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          paddingRight: '16px',
+                        }}
+                      >
+                        {alert.message || 'Alerte sans message'}
+                      </p>
+
+                      <StatusBadgeWithDot
+                        status={mapStatusToBadge(alert.status || 'OPEN')}
+                        animated={alert.status === 'OPEN'}
+                      />
+
+                      <span style={{ fontSize: '12px', color: 'var(--text-subtle)' }}>
+                        {formatAlertTime(alert.created_at)}
+                      </span>
+
+                      <button
+                        style={{
+                          width: '36px',
+                          height: '28px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--border)',
+                          background: 'transparent',
+                          color: 'var(--text-subtle)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <ChevronRight size={14} />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
-            <button
-              onClick={() => navigate('/metrics')}
+
+            <div
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                background: 'none',
-                border: 'none',
-                color: '#d946ef',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                fontFamily: 'Sora, sans-serif',
-                padding: '4px 8px',
-                borderRadius: '6px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                borderRadius: '12px',
+                overflow: 'hidden',
               }}
             >
-              View metrics <ChevronRight size={13} />
-            </button>
-          </div>
-
-          {loading ? (
-            <div style={{ padding: '16px' }}>
-              {[...Array(5)].map((_, index) => (
-                <div
-                  key={index}
-                  className="skeleton"
-                  style={{ height: '56px', marginBottom: '8px', borderRadius: '8px' }}
-                />
-              ))}
-            </div>
-          ) : slowEndpoints.length === 0 ? (
-            <div style={{ padding: '40px', textAlign: 'center' }}>
-              <CheckCircle size={24} color="#10b981" style={{ marginBottom: '8px' }} />
-              <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-subtle)' }}>
-                Aucun endpoint avec trafic sur les 24 dernieres heures
-              </p>
-            </div>
-          ) : (
-            slowEndpoints.map((endpoint, index) => (
               <div
-                key={endpoint.endpoint_id}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: '110px 1fr 140px 110px 100px 70px',
-                  padding: '14px 20px',
-                  borderBottom: index < slowEndpoints.length - 1 ? '1px solid var(--border)' : 'none',
+                  padding: '16px 20px',
+                  borderBottom: '1px solid var(--border)',
+                  display: 'flex',
                   alignItems: 'center',
-                  cursor: 'pointer',
-                  transition: 'background 0.15s',
+                  justifyContent: 'space-between',
                 }}
-                onMouseEnter={(event) => {
-                  event.currentTarget.style.background = 'rgba(255,255,255,0.02)'
-                }}
-                onMouseLeave={(event) => {
-                  event.currentTarget.style.background = 'transparent'
-                }}
-                onClick={() => navigate(`/metrics?service=${endpoint.api_service_id}&endpoint=${endpoint.endpoint_id}`)}
               >
-                <div>
-                  <MethodBadge method={endpoint.method} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Gauge size={16} color="var(--pink)" />
+                  <div>
+                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Top 5 slowest endpoints
+                    </p>
+                    <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-subtle)' }}>
+                      Endpoints les plus lents du projet sur 24h
+                    </p>
+                  </div>
                 </div>
 
-                <div style={{ minWidth: 0 }}>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: '13px',
-                      color: 'var(--text-primary)',
-                      fontWeight: 600,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {endpoint.path}
-                  </p>
-                  <p
-                    style={{
-                      margin: '2px 0 0',
-                      fontSize: '11px',
-                      color: 'var(--text-subtle)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {endpoint.service_name}
-                  </p>
-                </div>
-
-                <span style={{ fontSize: '13px', fontWeight: 700, color: '#fbbf24', fontFamily: 'monospace' }}>
-                  {endpoint.avg_response_time_ms.toFixed(2)} ms
-                </span>
-
-                <span
+                <button
+                  onClick={() => navigate('/metrics')}
                   style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--pink)',
                     fontSize: '12px',
-                    color: endpoint.error_rate_percent > 5 ? '#ef4444' : 'var(--text-muted)',
-                    fontFamily: 'monospace',
+                    fontWeight: 600,
+                    cursor: 'pointer',
                   }}
                 >
-                  {endpoint.error_rate_percent.toFixed(2)}%
-                </span>
-
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                  {endpoint.total_requests}
-                </span>
-
-                <div style={{ color: 'var(--text-subtle)' }}>
-                  <ChevronRight size={14} />
-                </div>
+                  View metrics <ChevronRight size={13} />
+                </button>
               </div>
-            ))
-          )}
-        </div>
+
+              {loading ? (
+                <div style={{ padding: '16px' }}>
+                  {[...Array(5)].map((_, index) => (
+                    <div
+                      key={index}
+                      className="skeleton"
+                      style={{ height: '56px', marginBottom: '8px', borderRadius: '8px' }}
+                    />
+                  ))}
+                </div>
+              ) : slowEndpoints.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center' }}>
+                  <CheckCircle size={24} color="#10b981" style={{ marginBottom: '8px' }} />
+                  <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-subtle)' }}>
+                    Aucun endpoint avec trafic sur les 24 dernières heures
+                  </p>
+                </div>
+              ) : (
+                slowEndpoints.map((endpoint, index) => (
+                  <div
+                    key={endpoint.endpoint_id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '110px 1fr 140px 110px 100px 70px',
+                      padding: '14px 20px',
+                      borderBottom: index < slowEndpoints.length - 1 ? '1px solid var(--border)' : 'none',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => navigate(`/metrics?service=${endpoint.api_service_id}&endpoint=${endpoint.endpoint_id}`)}
+                  >
+                    <MethodBadge method={endpoint.method} />
+
+                    <div style={{ minWidth: 0 }}>
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: '13px',
+                          color: 'var(--text-primary)',
+                          fontWeight: 600,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {endpoint.path}
+                      </p>
+
+                      <p
+                        style={{
+                          margin: '2px 0 0',
+                          fontSize: '11px',
+                          color: 'var(--text-subtle)',
+                        }}
+                      >
+                        {endpoint.service_name}
+                      </p>
+                    </div>
+
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#fbbf24', fontFamily: 'monospace' }}>
+                      {endpoint.avg_response_time_ms.toFixed(2)} ms
+                    </span>
+
+                    <span
+                      style={{
+                        fontSize: '12px',
+                        color: endpoint.error_rate_percent > 5 ? '#ef4444' : 'var(--text-muted)',
+                        fontFamily: 'monospace',
+                      }}
+                    >
+                      {endpoint.error_rate_percent.toFixed(2)}%
+                    </span>
+
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                      {endpoint.total_requests}
+                    </span>
+
+                    <ChevronRight size={14} color="var(--text-subtle)" />
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
       </div>
     </Layout>
   )

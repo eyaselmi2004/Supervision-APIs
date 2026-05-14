@@ -117,7 +117,7 @@ class ApiServiceResponse(BaseModel):
     created_at: datetime
     project_id: Optional[UUID] = None  # ← AJOUTE CETTE LIGNE
     
-    class Config:
+class Config:
         from_attributes = True
 
 
@@ -396,3 +396,32 @@ class ExplainIssueRequest(BaseModel):
 
 class ExplainIssueResponse(BaseModel):
     analysis: str
+
+
+# LLM - Endpoint issue explanation
+
+class ExplainEndpointIssueRequest(BaseModel):
+    period_hours: int = Field(24, ge=1, le=168)
+
+
+class ExplainEndpointIssueResponse(BaseModel):
+    endpoint_id: UUID
+    analysis: str
+
+class ExplainAlertResponse(BaseModel):
+    alert_id: UUID
+    analysis: str
+
+class JoinTeamRequestCreate(BaseModel):
+    invite_code: str = Field(..., min_length=1)
+
+
+class JoinTeamRequestResponse(BaseModel):
+    id: UUID
+    team_id: UUID
+    team_name: str
+    user_id: UUID
+    user_name: str
+    user_email: str
+    status: str
+    created_at: datetime

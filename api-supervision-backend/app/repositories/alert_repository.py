@@ -43,51 +43,126 @@ class AlertRepository:
         is_enabled: Optional[bool] = None,
     ) -> Optional[asyncpg.Record]:
         fields, values, idx = [], [], 1
+
         if name is not None:
-            fields.append(f"name = ${idx}"); values.append(name); idx += 1
+            fields.append(f"name = ${idx}")
+            values.append(name)
+            idx += 1
+
         if threshold is not None:
-            fields.append(f"threshold = ${idx}"); values.append(threshold); idx += 1
+            fields.append(f"threshold = ${idx}")
+            values.append(threshold)
+            idx += 1
+
         if window_seconds is not None:
-            fields.append(f"window_seconds = ${idx}"); values.append(window_seconds); idx += 1
+            fields.append(f"window_seconds = ${idx}")
+            values.append(window_seconds)
+            idx += 1
+
         if is_enabled is not None:
-            fields.append(f"is_enabled = ${idx}"); values.append(is_enabled); idx += 1
+            fields.append(f"is_enabled = ${idx}")
+            values.append(is_enabled)
+            idx += 1
+
         if not fields:
             return await self.get_rule_by_id(rule_id)
+
         values.append(rule_id)
+
         return await self.conn.fetchrow(
-            f"UPDATE alert_rules SET {', '.join(fields)} WHERE id = ${idx} RETURNING *",
+            f"""
+            UPDATE alert_rules
+            SET {', '.join(fields)}
+            WHERE id = ${idx}
+            RETURNING *
+            """,
             *values,
         )
 
     async def delete_rule(self, rule_id: UUID) -> bool:
         result = await self.conn.execute(
-            "DELETE FROM alert_rules WHERE id = $1", rule_id
+            "DELETE FROM alert_rules WHERE id = $1",
+            rule_id,
         )
         return result == "DELETE 1"
 
-    # ── Alert ────────────────────────────────────────────
+    # ── Alerts ───────────────────────────────────────────
 
     async def get_all_alerts(
         self,
+        project_id: Optional[UUID] = None,
         status: Optional[str] = None,
         limit: int = 50,
     ) -> List[asyncpg.Record]:
+
+        if project_id and status:
+            return await self.conn.fetch(
+                """
+                SELECT DISTINCT a.*
+                FROM alerts a
+                JOIN alert_rules ar ON a.rule_id = ar.id
+                JOIN endpoints e ON ar.endpoint_id = e.id
+                JOIN api_services s ON e.api_service_id = s.id
+                WHERE s.project_id = $1
+                AND a.status = $2
+                ORDER BY a.created_at DESC
+                LIMIT $3
+                """,
+                project_id,
+                status,
+                limit,
+            )
+
+        if project_id:
+            return await self.conn.fetch(
+                """
+                SELECT DISTINCT a.*
+                FROM alerts a
+                JOIN alert_rules ar ON a.rule_id = ar.id
+                JOIN endpoints e ON ar.endpoint_id = e.id
+                JOIN api_services s ON e.api_service_id = s.id
+                WHERE s.project_id = $1
+                ORDER BY a.created_at DESC
+                LIMIT $2
+                """,
+                project_id,
+                limit,
+            )
+
         if status:
             return await self.conn.fetch(
-                "SELECT * FROM alerts WHERE status = $1 ORDER BY created_at DESC LIMIT $2",
-                status, limit,
+                """
+                SELECT *
+                FROM alerts
+                WHERE status = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                status,
+                limit,
             )
+
         return await self.conn.fetch(
-            "SELECT * FROM alerts ORDER BY created_at DESC LIMIT $1", limit,
+            """
+            SELECT *
+            FROM alerts
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit,
         )
 
     async def get_alert_by_id(self, alert_id: UUID) -> Optional[asyncpg.Record]:
         return await self.conn.fetchrow(
-            "SELECT * FROM alerts WHERE id = $1", alert_id
+            "SELECT * FROM alerts WHERE id = $1",
+            alert_id,
         )
 
     async def create_alert(
-        self, rule_id: UUID, message: str, severity: str
+        self,
+        rule_id: UUID,
+        message: str,
+        severity: str,
     ) -> asyncpg.Record:
         return await self.conn.fetchrow(
             """
@@ -95,29 +170,39 @@ class AlertRepository:
             VALUES ($1, $2, $3)
             RETURNING *
             """,
-            rule_id, message, severity,
+            rule_id,
+            message,
+            severity,
         )
 
-    async def acknowledge(self, alert_id: UUID, user_id: UUID) -> Optional[asyncpg.Record]:
+    async def acknowledge(
+        self,
+        alert_id: UUID,
+        user_id: UUID,
+    ) -> Optional[asyncpg.Record]:
         return await self.conn.fetchrow(
             """
             UPDATE alerts
             SET status = 'ACKNOWLEDGED',
                 acknowledged_at = $1,
-                managed_by_id   = $2
+                managed_by_id = $2
             WHERE id = $3
             RETURNING *
             """,
-            datetime.now(timezone.utc), user_id, alert_id,
+            datetime.now(timezone.utc),
+            user_id,
+            alert_id,
         )
 
     async def resolve(self, alert_id: UUID) -> Optional[asyncpg.Record]:
         return await self.conn.fetchrow(
             """
             UPDATE alerts
-            SET status = 'RESOLVED', resolved_at = $1
+            SET status = 'RESOLVED',
+                resolved_at = $1
             WHERE id = $2
             RETURNING *
             """,
-            datetime.now(timezone.utc), alert_id,
+            datetime.now(timezone.utc),
+            alert_id,
         )

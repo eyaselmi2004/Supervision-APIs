@@ -1,101 +1,66 @@
 import api from './api'
-import type {
-  ApiService,
-  Endpoint,
-  EndpointDiscoveryResult,
-  EndpointTestResult,
-} from '../types'
-
-
-export interface MonitoredApiLoginResponse {
-  access_token: string
-  token_type: string
-}
-interface CreateApiServicePayload {
-  name: string
-  base_url: string
-  is_active?: boolean
-  project_id?: string | null
-}
-
-interface UpdateApiServicePayload {
-  name?: string
-  base_url?: string
-  is_active?: boolean
-  project_id?: string | null
-}
-
-interface CreateEndpointPayload {
-  path: string
-  method: string
-  is_active?: boolean
-}
-
-interface EndpointTestPayload {
-  headers?: Record<string, string>
-  query_params?: Record<string, string>
-  json_body?: unknown
-}
 
 export const apiServicesService = {
-  getAll: async (): Promise<ApiService[]> => {
-    const response = await api.get('/api-services')
+  getAll: async (projectId?: string) => {
+    const url = projectId
+      ? `/api-services?project_id=${projectId}`
+      : '/api-services'
+
+    const response = await api.get(url)
     return response.data
   },
 
-  getByProject: async (projectId: string): Promise<ApiService[]> => {
-    const response = await api.get('/api-services', {
-      params: { project_id: projectId },
-    })
-    return response.data
-  },
-
-  getById: async (serviceId: string): Promise<ApiService> => {
+  getById: async (serviceId: string) => {
     const response = await api.get(`/api-services/${serviceId}`)
     return response.data
   },
 
-  create: async (payload: CreateApiServicePayload): Promise<ApiService> => {
-    const response = await api.post('/api-services', {
-      name: payload.name,
-      base_url: payload.base_url,
-      is_active: payload.is_active ?? true,
-      project_id: payload.project_id ?? null,
-    })
+  create: async (data: {
+    name: string
+    base_url: string
+    is_active?: boolean
+    project_id?: string | null
+  }) => {
+    const response = await api.post('/api-services', data)
     return response.data
   },
 
   update: async (
     serviceId: string,
-    payload: UpdateApiServicePayload
-  ): Promise<ApiService> => {
-    const response = await api.put(`/api-services/${serviceId}`, payload)
+    data: {
+      name?: string
+      base_url?: string
+      is_active?: boolean
+      project_id?: string | null
+    }
+  ) => {
+    const response = await api.put(`/api-services/${serviceId}`, data)
     return response.data
   },
 
-  delete: async (serviceId: string): Promise<{ message: string }> => {
+  delete: async (serviceId: string) => {
     const response = await api.delete(`/api-services/${serviceId}`)
     return response.data
   },
 
-  getEndpoints: async (serviceId: string): Promise<Endpoint[]> => {
+  getEndpoints: async (serviceId: string) => {
     const response = await api.get(`/api-services/${serviceId}/endpoints`)
     return response.data
   },
 
   createEndpoint: async (
     serviceId: string,
-    payload: CreateEndpointPayload
-  ): Promise<Endpoint> => {
-    const response = await api.post(`/api-services/${serviceId}/endpoints`, {
-      path: payload.path,
-      method: payload.method,
-      is_active: payload.is_active ?? true,
-    })
+    data: {
+      path: string
+      method: string
+      is_active?: boolean
+    }
+  ) => {
+    const response = await api.post(`/api-services/${serviceId}/endpoints`, data)
     return response.data
   },
 
-  discoverEndpoints: async (serviceId: string): Promise<EndpointDiscoveryResult> => {
+  discoverEndpoints: async (serviceId: string) => {
     const response = await api.post(`/api-services/${serviceId}/discover-endpoints`)
     return response.data
   },
@@ -103,25 +68,28 @@ export const apiServicesService = {
   testEndpoint: async (
     serviceId: string,
     endpointId: string,
-    payload?: EndpointTestPayload
-  ): Promise<EndpointTestResult> => {
+    payload?: {
+      headers?: Record<string, string>
+      query_params?: Record<string, string>
+      json_body?: any
+    }
+  ) => {
     const response = await api.post(
       `/api-services/${serviceId}/endpoints/${endpointId}/test`,
-      payload ?? {}
+      payload || {}
     )
     return response.data
   },
 
-
   loginToMonitoredApi: async (
-  serviceId: string,
-  payload: {
-    username: string
-    password: string
-    login_path?: string
-  }
-): Promise<MonitoredApiLoginResponse> => {
-  const response = await api.post(`/api-services/${serviceId}/auth/login`, payload)
-  return response.data
-},
+    serviceId: string,
+    data: {
+      username: string
+      password: string
+      login_path?: string
+    }
+  ) => {
+    const response = await api.post(`/api-services/${serviceId}/auth/login`, data)
+    return response.data
+  },
 }

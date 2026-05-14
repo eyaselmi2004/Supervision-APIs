@@ -1,6 +1,6 @@
 ﻿"""
 app/api/v1/endpoints/metrics.py
-Metrics ingestion and analytics endpoints.
+Metrics ingestion, analytics, automatic alerts and incidents.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -16,7 +16,10 @@ from app.core.database import get_conn
 
 router = APIRouter(prefix="/metrics", tags=["Metrics"])
 
-_ALLOWED_BUCKET = re.compile(r"^\s*\d+\s+(minute|minutes|hour|hours|day|days)\s*$", re.IGNORECASE)
+_ALLOWED_BUCKET = re.compile(
+    r"^\s*\d+\s+(minute|minutes|hour|hours|day|days)\s*$",
+    re.IGNORECASE,
+)
 
 
 class MetricData(BaseModel):
@@ -65,7 +68,9 @@ def _resolve_period(
     default_hours: int = 24,
 ) -> tuple[datetime, datetime]:
     end_dt = _parse_iso_datetime(period_end) or datetime.now(timezone.utc)
-    start_dt = _parse_iso_datetime(period_start) or (end_dt - timedelta(hours=default_hours))
+    start_dt = _parse_iso_datetime(period_start) or (
+        end_dt - timedelta(hours=default_hours)
+    )
 
     if start_dt >= end_dt:
         start_dt = end_dt - timedelta(hours=default_hours)
@@ -91,17 +96,234 @@ def _metric_method(value: str) -> str:
     return (value or "GET").upper().strip()
 
 
+async def _get_default_owner_id(conn: asyncpg.Connection) -> UUID:
+    owner_id = await conn.fetchval(
+        """
+        SELECT id
+        FROM users
+        WHERE role = 'ADMIN'
+        ORDER BY created_at ASC
+        LIMIT 1
+        """
+    )
+
+    if owner_id:
+        return owner_id
+
+    owner_id = await conn.fetchval(
+        """
+        SELECT id
+        FROM users
+        ORDER BY created_at ASC
+        LIMIT 1
+        """
+    )
+
+    if not owner_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Aucun utilisateur trouvé pour créer les règles d'alerte",
+        )
+
+    return owner_id
+
+
+async def _get_or_create_alert_rule(
+    conn: asyncpg.Connection,
+    endpoint_id: UUID,
+    rule_type: str,
+    name: str,
+    threshold: float,
+    window_seconds: int = 60,
+) -> UUID:
+    existing_rule = await conn.fetchrow(
+        """
+        SELECT id
+        FROM alert_rules
+        WHERE endpoint_id = $1
+          AND type = $2
+        LIMIT 1
+        """,
+        endpoint_id,
+        rule_type,
+    )
+
+    if existing_rule:
+        return existing_rule["id"]
+
+    owner_id = await _get_default_owner_id(conn)
+
+    rule_id = await conn.fetchval(
+        """
+        INSERT INTO alert_rules
+            (name, type, threshold, window_seconds, endpoint_id, owner_id, is_enabled)
+        VALUES
+            ($1, $2, $3, $4, $5, $6, TRUE)
+        RETURNING id
+        """,
+        name,
+        rule_type,
+        threshold,
+        window_seconds,
+        endpoint_id,
+        owner_id,
+    )
+
+    return rule_id
+
+
+async def _create_alert_if_not_duplicate(
+    conn: asyncpg.Connection,
+    rule_id: UUID,
+    message: str,
+    severity: str,
+) -> UUID:
+    existing_alert = await conn.fetchrow(
+        """
+        SELECT id
+        FROM alerts
+        WHERE rule_id = $1
+          AND message = $2
+          AND status = 'OPEN'
+          AND created_at > NOW() - INTERVAL '5 minutes'
+        LIMIT 1
+        """,
+        rule_id,
+        message,
+    )
+
+    if existing_alert:
+        return existing_alert["id"]
+
+    alert_id = await conn.fetchval(
+        """
+        INSERT INTO alerts
+            (rule_id, message, severity, status)
+        VALUES
+            ($1, $2, $3, 'OPEN')
+        RETURNING id
+        """,
+        rule_id,
+        message,
+        severity,
+    )
+
+    return alert_id
+
+
+async def _create_incident_if_not_duplicate(
+    conn: asyncpg.Connection,
+    api_service_id: UUID,
+    source_alert_id: UUID,
+    title: str,
+) -> None:
+    existing_incident = await conn.fetchrow(
+        """
+        SELECT id
+        FROM incidents
+        WHERE api_service_id = $1
+          AND title = $2
+          AND status = 'OPEN'
+          AND start_time > NOW() - INTERVAL '10 minutes'
+        LIMIT 1
+        """,
+        api_service_id,
+        title,
+    )
+
+    if existing_incident:
+        return
+
+    await conn.execute(
+        """
+        INSERT INTO incidents
+            (api_service_id, source_alert_id, title, status)
+        VALUES
+            ($1, $2, $3, 'OPEN')
+        """,
+        api_service_id,
+        source_alert_id,
+        title,
+    )
+
+
+async def _evaluate_metric_and_create_alerts(
+    conn: asyncpg.Connection,
+    api_service_id: UUID,
+    endpoint_id: UUID,
+    endpoint_path: str,
+    method: str,
+    status_code: int,
+    response_time_ms: float,
+) -> None:
+    created_alert_id: Optional[UUID] = None
+
+    if status_code >= 400:
+        rule_id = await _get_or_create_alert_rule(
+            conn=conn,
+            endpoint_id=endpoint_id,
+            rule_type="ERROR_RATE",
+            name=f"HTTP errors on {method} {endpoint_path}",
+            threshold=1,
+            window_seconds=60,
+        )
+
+        severity = "CRITICAL" if status_code >= 500 else "WARNING"
+
+        created_alert_id = await _create_alert_if_not_duplicate(
+            conn=conn,
+            rule_id=rule_id,
+            message=f"HTTP {status_code} detected on {method} {endpoint_path}",
+            severity=severity,
+        )
+
+    if response_time_ms > 2000:
+        rule_id = await _get_or_create_alert_rule(
+            conn=conn,
+            endpoint_id=endpoint_id,
+            rule_type="LATENCY",
+            name=f"High latency on {method} {endpoint_path}",
+            threshold=2000,
+            window_seconds=60,
+        )
+
+        severity = "CRITICAL" if response_time_ms > 5000 else "WARNING"
+
+        latency_alert_id = await _create_alert_if_not_duplicate(
+            conn=conn,
+            rule_id=rule_id,
+            message=(
+                f"High latency detected on {method} {endpoint_path} "
+                f"({round(response_time_ms, 2)} ms)"
+            ),
+            severity=severity,
+        )
+
+        if severity == "CRITICAL":
+            created_alert_id = latency_alert_id
+
+    if status_code >= 500 and created_alert_id:
+        await _create_incident_if_not_duplicate(
+            conn=conn,
+            api_service_id=api_service_id,
+            source_alert_id=created_alert_id,
+            title=f"Critical server error on {method} {endpoint_path}",
+        )
+
+    if response_time_ms > 5000 and created_alert_id:
+        await _create_incident_if_not_duplicate(
+            conn=conn,
+            api_service_id=api_service_id,
+            source_alert_id=created_alert_id,
+            title=f"Critical latency incident on {method} {endpoint_path}",
+        )
+
+
 @router.post("/agent")
 async def receive_metric(
     data: MetricData,
     conn: asyncpg.Connection = Depends(get_conn),
 ):
-    """
-    Receive one metric from the supervision middleware and store it
-    in the migration-based schema:
-    - endpoints(api_service_id, path, method, ...)
-    - api_metrics(endpoint_id, timestamp, response_time_ms, status_code, success)
-    """
     print("[METRIC] received")
 
     try:
@@ -118,13 +340,16 @@ async def receive_metric(
             """,
             api_uuid,
         )
+
         if not api_service:
             raise HTTPException(status_code=404, detail="API Service not found")
 
         method = _metric_method(data.method)
         metric_timestamp = _parse_iso_datetime(data.timestamp) or datetime.now(timezone.utc)
         metric_timestamp = _db_timestamptz(metric_timestamp)
-        success = int(data.status_code) < 400
+        status_code = int(data.status_code)
+        response_time_ms = float(data.response_time_ms)
+        success = status_code < 400
 
         endpoint = await conn.fetchrow(
             """
@@ -150,23 +375,37 @@ async def receive_metric(
             """,
             endpoint_id,
             metric_timestamp,
-            float(data.response_time_ms),
-            int(data.status_code),
+            response_time_ms,
+            status_code,
             success,
+        )
+
+        await _evaluate_metric_and_create_alerts(
+            conn=conn,
+            api_service_id=api_uuid,
+            endpoint_id=endpoint_id,
+            endpoint_path=data.endpoint_path,
+            method=method,
+            status_code=status_code,
+            response_time_ms=response_time_ms,
         )
 
         return {
             "status": "success",
             "metric_id": str(metric_id),
             "endpoint_id": str(endpoint_id),
-            "message": "Metric recorded",
+            "message": "Metric recorded and evaluated",
         }
 
     except HTTPException:
         raise
+
     except Exception as exc:
         print(f"[METRIC] processing failed: {exc}")
-        raise HTTPException(status_code=500, detail=f"Metric ingestion failed: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Metric ingestion failed: {exc}",
+        ) from exc
 
 
 @router.get("/api/{api_id}")
@@ -175,9 +414,6 @@ async def get_api_metrics(
     limit: int = Query(100, ge=1, le=1000),
     conn: asyncpg.Connection = Depends(get_conn),
 ):
-    """
-    Get recent raw metrics for one API service.
-    """
     try:
         api_uuid = UUID(api_id)
     except ValueError as exc:
@@ -210,8 +446,12 @@ async def get_api_metrics(
             "count": len(results),
             "metrics": [dict(row) for row in results],
         }
+
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Unable to fetch metrics: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to fetch metrics: {exc}",
+        ) from exc
 
 
 @router.get("/api/{api_id}/stats")
@@ -219,9 +459,6 @@ async def get_api_stats(
     api_id: str,
     conn: asyncpg.Connection = Depends(get_conn),
 ):
-    """
-    Get high-level stats for one API service (last hour).
-    """
     try:
         api_uuid = UUID(api_id)
     except ValueError as exc:
@@ -246,7 +483,9 @@ async def get_api_stats(
 
         total_requests = int(stats["total_requests"] or 0)
         error_count = float(stats["error_count"] or 0.0)
-        error_rate_percent = (error_count / total_requests * 100.0) if total_requests > 0 else 0.0
+        error_rate_percent = (
+            error_count / total_requests * 100.0
+        ) if total_requests > 0 else 0.0
 
         return {
             "api_id": api_id,
@@ -257,8 +496,12 @@ async def get_api_stats(
             "error_rate_percent": round(error_rate_percent, 2),
             "period": "Last 1 hour",
         }
+
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Unable to fetch API stats: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to fetch API stats: {exc}",
+        ) from exc
 
 
 @router.get("/endpoint/{endpoint_id}")
@@ -267,9 +510,6 @@ async def get_endpoint_metrics(
     limit: int = Query(100, ge=1, le=1000),
     conn: asyncpg.Connection = Depends(get_conn),
 ):
-    """
-    Get recent raw metrics for one endpoint.
-    """
     try:
         endpoint_uuid = UUID(endpoint_id)
     except ValueError as exc:
@@ -314,8 +554,12 @@ async def get_endpoint_metrics(
 
     except HTTPException:
         raise
+
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Unable to fetch endpoint metrics: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to fetch endpoint metrics: {exc}",
+        ) from exc
 
 
 @router.get("/endpoint/{endpoint_id}/stats")
@@ -325,9 +569,6 @@ async def get_endpoint_stats(
     period_end: Optional[str] = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
 ):
-    """
-    Get endpoint KPIs for the selected period.
-    """
     try:
         endpoint_uuid = UUID(endpoint_id)
     except ValueError as exc:
@@ -346,7 +587,11 @@ async def get_endpoint_stats(
         if not endpoint:
             raise HTTPException(status_code=404, detail="Endpoint not found")
 
-        period_start_dt, period_end_dt = _resolve_period(period_start, period_end, default_hours=24)
+        period_start_dt, period_end_dt = _resolve_period(
+            period_start,
+            period_end,
+            default_hours=24,
+        )
         period_start_dt = _db_timestamptz(period_start_dt)
         period_end_dt = _db_timestamptz(period_end_dt)
 
@@ -377,7 +622,10 @@ async def get_endpoint_stats(
         min_response_time_ms = float(stats["min_response_time_ms"] or 0.0)
         max_response_time_ms = float(stats["max_response_time_ms"] or 0.0)
         p95_latency_ms = float(stats["p95_latency_ms"] or 0.0)
-        error_rate_percent = (error_count / total_requests * 100.0) if total_requests > 0 else 0.0
+
+        error_rate_percent = (
+            error_count / total_requests * 100.0
+        ) if total_requests > 0 else 0.0
 
         return {
             "endpoint_id": endpoint_id,
@@ -398,8 +646,12 @@ async def get_endpoint_stats(
 
     except HTTPException:
         raise
+
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Unable to compute endpoint stats: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to compute endpoint stats: {exc}",
+        ) from exc
 
 
 @router.get("/endpoint/{endpoint_id}/time-series")
@@ -410,9 +662,6 @@ async def get_endpoint_time_series(
     bucket_interval: Optional[str] = Query("1 hour"),
     conn: asyncpg.Connection = Depends(get_conn),
 ):
-    """
-    Get time-bucketed endpoint metrics for charts.
-    """
     try:
         endpoint_uuid = UUID(endpoint_id)
     except ValueError as exc:
@@ -431,7 +680,11 @@ async def get_endpoint_time_series(
         if not endpoint:
             raise HTTPException(status_code=404, detail="Endpoint not found")
 
-        period_start_dt, period_end_dt = _resolve_period(period_start, period_end, default_hours=24)
+        period_start_dt, period_end_dt = _resolve_period(
+            period_start,
+            period_end,
+            default_hours=24,
+        )
         period_start_dt = _db_timestamptz(period_start_dt)
         period_end_dt = _db_timestamptz(period_end_dt)
 
@@ -457,18 +710,29 @@ async def get_endpoint_time_series(
         )
 
         result = []
+
         for row in rows:
             total_requests = int(row["total_requests"] or 0)
             error_count = int(row["error_count"] or 0)
-            error_rate_percent = (error_count / total_requests * 100.0) if total_requests > 0 else 0.0
+            error_rate_percent = (
+                error_count / total_requests * 100.0
+            ) if total_requests > 0 else 0.0
+
             bucket_value = row["bucket"]
-            bucket_iso = bucket_value.isoformat() if isinstance(bucket_value, datetime) else str(bucket_value)
+            bucket_iso = (
+                bucket_value.isoformat()
+                if isinstance(bucket_value, datetime)
+                else str(bucket_value)
+            )
 
             result.append(
                 {
                     "bucket": bucket_iso,
                     "total_requests": total_requests,
-                    "avg_response_time_ms": round(float(row["avg_response_time_ms"] or 0.0), 2),
+                    "avg_response_time_ms": round(
+                        float(row["avg_response_time_ms"] or 0.0),
+                        2,
+                    ),
                     "error_count": error_count,
                     "error_rate_percent": round(error_rate_percent, 2),
                 }
@@ -478,6 +742,10 @@ async def get_endpoint_time_series(
 
     except HTTPException:
         raise
+
     except Exception as exc:
         print(f"[METRIC] time-series failed: {exc}")
-        raise HTTPException(status_code=500, detail=f"Unable to compute time series: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to compute time series: {exc}",
+        ) from exc

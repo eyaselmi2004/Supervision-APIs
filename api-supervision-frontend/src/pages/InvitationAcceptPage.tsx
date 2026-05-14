@@ -2,82 +2,64 @@ import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { CheckCircle, XCircle, Loader } from 'lucide-react'
 import { Layout } from '../components/layout/Layout'
-import { Button } from '../components/ui/Button'
 import api from '../services/api'
-import { teamsService } from '../services/teams.service'
-import { projectsService } from '../services/projects.service'
 
-export const InvitationAcceptPage: React.FC = () => {
+interface InvitationAcceptPageProps {
+  mode?: 'accept' | 'reject'
+}
+
+export const InvitationAcceptPage: React.FC<InvitationAcceptPageProps> = ({
+  mode = 'accept',
+}) => {
   const { invitationId } = useParams<{ invitationId: string }>()
   const navigate = useNavigate()
+
   const [loading, setLoading] = useState(true)
   const [success, setSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [teamName, setTeamName] = useState<string | null>(null)
 
   useEffect(() => {
-    acceptInvitation()
-  }, [invitationId])
+    handleInvitation()
+  }, [invitationId, mode])
 
-  const acceptInvitation = async () => {
+  const handleInvitation = async () => {
     if (!invitationId) {
       setError('Invitation ID manquant')
       setLoading(false)
       return
     }
 
+    const token = localStorage.getItem('access_token')
+
+    if (!token) {
+      const redirectPath = window.location.pathname
+      navigate(`/login?redirect=${encodeURIComponent(redirectPath)}`)
+      return
+    }
+
     try {
       setLoading(true)
-      console.log(`🔴 Acceptation invitation: ${invitationId}`)
-      
-      // Récupérer les infos de l'invitation depuis les pending invitations
-      const invitationsResponse = await api.get('/teams/invitations/pending')
-      const invitations = invitationsResponse.data
-      
-      console.log('📋 Invitations pending:', invitations)
-      
-      // Trouver l'invitation correspondante
-      const invitation = invitations.find((inv: any) => inv.id === invitationId)
-      
-      if (!invitation) {
-        setError('Invitation introuvable')
-        setLoading(false)
-        return
-      }
-      
-      console.log('✅ Invitation trouvée:', invitation)
-      
-      const teamId = invitation.team_id
-      const teamNameValue = invitation.name
-      
-      // Accepter l'invitation
-      console.log(`🔴 Appel endpoint: /teams/${teamId}/accept-invitation`)
-      const acceptResponse = await api.post(`/teams/${teamId}/accept-invitation`)
-      
-      console.log('✅ Réponse acceptation:', acceptResponse.data)
-      
-      // ✅ ÉTAPE 6 : Recharger les équipes et projets
-      console.log('📚 Rechargement des équipes et projets...')
-      try {
-        await teamsService.getAll()
-        await projectsService.getMyProjects()
-        console.log('✅ Équipes et projets rechargés')
-      } catch (e) {
-        console.warn('⚠️ Erreur lors du rechargement:', e)
-        // Continuer même si le rechargement échoue
-      }
-      
+
+      const endpoint =
+        mode === 'reject'
+          ? `/teams/invitations/${invitationId}/reject`
+          : `/teams/invitations/${invitationId}/accept`
+
+      await api.post(endpoint)
+
       setSuccess(true)
-      setTeamName(teamNameValue)
-      
-      // Rediriger vers /projects après 3 secondes (au lieu de /teams)
+
       setTimeout(() => {
-        navigate('/projects')
-      }, 3000)
+        navigate('/teams')
+      }, 1800)
     } catch (e: any) {
-      console.error('❌ Erreur acceptation:', e)
-      const errorMsg = e.response?.data?.detail || e.message || 'Erreur lors de l\'acceptation'
-      setError(errorMsg)
+      console.error('Erreur invitation:', e)
+      setError(
+        e.response?.data?.detail ||
+          e.message ||
+          "Erreur lors du traitement de l'invitation"
+      )
+    } finally {
       setLoading(false)
     }
   }
@@ -85,23 +67,24 @@ export const InvitationAcceptPage: React.FC = () => {
   if (loading) {
     return (
       <Layout>
-        <div style={{ 
-          padding: '100px 20px', 
-          textAlign: 'center',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '60vh',
-        }}>
-          <Loader 
-            size={48} 
-            color="#d946ef" 
-            style={{ animation: 'spin 2s linear infinite', marginBottom: '20px' }}
+        <div style={centerStyle}>
+          <Loader
+            size={52}
+            color="#E07FA0"
+            style={{
+              animation: 'spin 1.5s linear infinite',
+              marginBottom: 20,
+            }}
           />
-          <p style={{ color: 'var(--text-muted)', fontSize: '16px' }}>
-            Acceptation de l'invitation en cours...
-          </p>
+
+          <h2 style={titleStyle}>
+            {mode === 'reject'
+              ? "Refus de l'invitation..."
+              : "Acceptation de l'invitation..."}
+          </h2>
+
+          <p style={textStyle}>Merci de patienter pendant le traitement.</p>
+
           <style>{`
             @keyframes spin {
               0% { transform: rotate(0deg); }
@@ -116,65 +99,82 @@ export const InvitationAcceptPage: React.FC = () => {
   if (success) {
     return (
       <Layout>
-        <div style={{ 
-          padding: '100px 20px', 
-          textAlign: 'center',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '60vh',
-        }}>
-          <CheckCircle size={80} color="#10b981" style={{ marginBottom: '20px' }} />
-          <h2 style={{ color: 'var(--text-primary)', margin: '0 0 10px 0', fontSize: '28px', fontWeight: 700 }}>
-            Invitation acceptée ! 🎉
+        <div style={centerStyle}>
+          <CheckCircle size={82} color="#10b981" style={{ marginBottom: 22 }} />
+
+          <h2 style={titleStyle}>
+            {mode === 'reject'
+              ? 'Invitation refusée'
+              : 'Invitation acceptée ! 🎉'}
           </h2>
-          <p style={{ color: 'var(--text-muted)', marginTop: '10px', fontSize: '16px' }}>
-            Vous avez rejoint <strong>{teamName}</strong> avec succès.
+
+          <p style={textStyle}>
+            {mode === 'reject'
+              ? "L'invitation a été refusée avec succès."
+              : "Vous avez rejoint l'équipe avec succès."}
           </p>
-          <p style={{ color: 'var(--text-subtle)', marginTop: '20px', fontSize: '14px' }}>
-            Redirection automatique vers vos projets dans 3 secondes...
+
+          <p style={{ ...textStyle, fontSize: 13, marginTop: 18 }}>
+            Redirection vers vos équipes...
           </p>
-          <Button 
-            onClick={() => navigate('/projects')} 
-            style={{ marginTop: '30px' }}
-          >
-            Aller à mes projets
-          </Button>
+
+          <button onClick={() => navigate('/teams')} style={buttonStyle}>
+            Aller à mes équipes
+          </button>
         </div>
       </Layout>
     )
   }
 
-  if (error) {
-    return (
-      <Layout>
-        <div style={{ 
-          padding: '100px 20px', 
-          textAlign: 'center',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '60vh',
-        }}>
-          <XCircle size={80} color="#ef4444" style={{ marginBottom: '20px' }} />
-          <h2 style={{ color: 'var(--text-primary)', margin: '0 0 10px 0', fontSize: '28px', fontWeight: 700 }}>
-            Erreur
-          </h2>
-          <p style={{ color: 'var(--text-muted)', marginTop: '10px', fontSize: '16px', maxWidth: '500px' }}>
-            {error}
-          </p>
-          <Button 
-            onClick={() => navigate('/projects')} 
-            style={{ marginTop: '30px' }}
-          >
-            Aller à mes projets
-          </Button>
-        </div>
-      </Layout>
-    )
-  }
+  return (
+    <Layout>
+      <div style={centerStyle}>
+        <XCircle size={82} color="#ef4444" style={{ marginBottom: 22 }} />
 
-  return null
+        <h2 style={titleStyle}>Erreur</h2>
+
+        <p style={textStyle}>
+          {error || "Impossible de traiter l'invitation."}
+        </p>
+
+        <button onClick={() => navigate('/teams')} style={buttonStyle}>
+          Aller à mes équipes
+        </button>
+      </div>
+    </Layout>
+  )
+}
+
+const centerStyle: React.CSSProperties = {
+  minHeight: '70vh',
+  padding: '80px 24px',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  textAlign: 'center',
+}
+
+const titleStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 28,
+  fontWeight: 800,
+  color: 'var(--text-primary)',
+}
+
+const textStyle: React.CSSProperties = {
+  marginTop: 12,
+  color: 'var(--text-muted)',
+  fontSize: 15,
+}
+
+const buttonStyle: React.CSSProperties = {
+  marginTop: 28,
+  padding: '11px 18px',
+  borderRadius: 10,
+  border: 'none',
+  background: '#E07FA0',
+  color: '#fff',
+  fontWeight: 800,
+  cursor: 'pointer',
 }

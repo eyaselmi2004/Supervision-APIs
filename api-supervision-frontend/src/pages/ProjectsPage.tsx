@@ -8,8 +8,9 @@ import { teamsService } from '../services/teams.service'
 import { apiServicesService } from '../services/apiServices.service'
 import { useProject } from '../contexts/ProjectContext'
 import { useAuth } from '../hooks/useAuth'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { Project } from '../types'
+import api from '../services/api'
 
 interface Team {
   id: string
@@ -31,7 +32,9 @@ interface ApiService {
 
 export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate()
-  const { user, isAdmin } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const { user } = useAuth()
   const { setSelectedProject } = useProject()
 
   const [projects, setProjects] = useState<Project[]>([])
@@ -52,7 +55,7 @@ export const ProjectsPage: React.FC = () => {
     icon_key: '',
     color: '#d946ef',
     team_id: '',
-    api_service_id: '',
+    api_service_id: 'none',
     api_service_id_manual: '',
   })
 
@@ -61,6 +64,25 @@ export const ProjectsPage: React.FC = () => {
     loadTeams()
     loadAvailableApis()
   }, [])
+
+  useEffect(() => {
+    const shouldCreate = searchParams.get('create')
+    const teamId = searchParams.get('teamId')
+
+    if (shouldCreate === 'true') {
+      resetForm()
+
+      if (teamId) {
+        setFormData((prev) => ({
+          ...prev,
+          team_id: teamId,
+        }))
+      }
+
+      setShowModal(true)
+      setSearchParams({})
+    }
+  }, [searchParams, setSearchParams])
 
   const loadProjects = async () => {
     setLoading(true)
@@ -102,7 +124,7 @@ export const ProjectsPage: React.FC = () => {
       icon_key: '',
       color: '#d946ef',
       team_id: '',
-      api_service_id: '',
+      api_service_id: 'none',
       api_service_id_manual: '',
     })
   }
@@ -114,8 +136,6 @@ export const ProjectsPage: React.FC = () => {
     }
 
     try {
-      console.log('🟣 formData before create =', formData)
-
       const projectPayload = {
         name: formData.name,
         description: formData.description,
@@ -125,24 +145,19 @@ export const ProjectsPage: React.FC = () => {
       }
 
       const createdProject = await projectsService.create(projectPayload)
-      console.log('✅ createdProject =', createdProject)
 
-      const apiIdToAssign =
-        formData.api_service_id_manual.trim() || formData.api_service_id
+      const manualApiId = formData.api_service_id_manual.trim()
+      const selectedApiId =
+        formData.api_service_id && formData.api_service_id !== 'none'
+          ? formData.api_service_id
+          : ''
 
-      if (apiIdToAssign) {
-        console.log('🔗 Assigning API to project...', {
-          api_service_id: apiIdToAssign,
+      const apiIdToAssign = manualApiId || selectedApiId
+
+      if (apiIdToAssign && apiIdToAssign.length > 10) {
+        await apiServicesService.update(apiIdToAssign, {
           project_id: createdProject.id,
         })
-
-        const updatedApi = await apiServicesService.update(apiIdToAssign, {
-          project_id: createdProject.id,
-        })
-
-        console.log('✅ API updated =', updatedApi)
-      } else {
-        console.log('⚠️ No API selected, skipping assignment')
       }
 
       resetForm()
@@ -151,14 +166,15 @@ export const ProjectsPage: React.FC = () => {
       await Promise.all([loadProjects(), loadAvailableApis()])
 
       navigate(`/projects/${createdProject.id}`)
-    } catch (e) {
+    } catch (e: any) {
       console.error('❌ Erreur création projet / assignation API:', e)
-      alert("Le projet a peut-être été créé, mais l’assignation de l’API a échoué. Vérifie la console.")
+      alert(e.response?.data?.detail || "Erreur lors de la création du projet.")
     }
   }
 
   const handleDelete = async (id: string) => {
     if (!confirm('Supprimer ce projet ?')) return
+
     try {
       await projectsService.delete(id)
       await loadProjects()
@@ -169,21 +185,32 @@ export const ProjectsPage: React.FC = () => {
 
   const handleSelectProject = (project: Project) => {
     setSelectedProject(project)
-    navigate(`/projects/${project.id}`)
+    navigate('/dashboard')
   }
 
-  const handleJoinTeam = () => {
+  const handleJoinTeam = async () => {
     if (!joinTeamCode.trim()) {
       alert('Veuillez entrer un code valide')
       return
     }
-    alert('Fonctionnalité en développement')
-    setJoinTeamCode('')
-    setShowJoinTeamModal(false)
+
+    try {
+      await api.post('/teams/join-requests', {
+        invite_code: joinTeamCode.trim(),
+      })
+
+      alert("Demande envoyée à l'administrateur de l'équipe ✅")
+      setJoinTeamCode('')
+      setShowJoinTeamModal(false)
+    } catch (e: any) {
+      alert(e.response?.data?.detail || "Erreur lors de l'envoi de la demande")
+    }
   }
 
   const copyToClipboard = () => {
-    navigator.clipboard.writeText(`Rejoignez mon équipe: ${window.location.origin}/projects?join=${user?.id}`)
+    navigator.clipboard.writeText(
+      `Rejoignez mon équipe: ${window.location.origin}/teams?join=true`
+    )
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -205,6 +232,7 @@ export const ProjectsPage: React.FC = () => {
       p.description?.toLowerCase().includes(searchQuery.toLowerCase())
 
     const matchesTeam = !filterMyTeams || !!p.team_id
+
     return matchesSearch && matchesTeam
   })
 
@@ -246,72 +274,70 @@ export const ProjectsPage: React.FC = () => {
           }}
         >
           <div>
-            <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            <h1
+              style={{
+                margin: 0,
+                fontSize: '28px',
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+              }}
+            >
               Projets
             </h1>
-            <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>
-              {isAdmin ? 'Créez et gérez vos projets' : 'Sélectionnez un projet'}
+            <p
+              style={{
+                margin: '4px 0 0',
+                fontSize: '13px',
+                color: 'var(--text-muted)',
+              }}
+            >
+              Sélectionnez un projet ou créez-en un dans votre équipe
             </p>
           </div>
 
           <div style={{ display: 'flex', gap: '12px', position: 'relative', zIndex: 20 }}>
-            {!isAdmin && (
-              <button
-                type="button"
-                onClick={() => setShowJoinTeamModal(true)}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-card)',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                Rejoindre une équipe
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setShowJoinTeamModal(true)}
+              style={{
+                padding: '10px 16px',
+                borderRadius: '10px',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-card)',
+                color: 'var(--text-primary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              Rejoindre une équipe
+            </button>
 
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => {
-                  console.log('create project clicked')
-                  resetForm()
-                  setShowModal(true)
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '10px 16px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-card)',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  position: 'relative',
-                  zIndex: 10,
-                  pointerEvents: 'auto',
-                }}
-              >
-                <Plus size={16} />
-                Créer un projet
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                resetForm()
+                setShowModal(true)
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 16px',
+                borderRadius: '10px',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-card)',
+                color: 'var(--text-primary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              <Plus size={16} />
+              Créer un projet
+            </button>
           </div>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            gap: '12px',
-            padding: '20px 0',
-            alignItems: 'center',
-          }}
-        >
+        <div style={{ display: 'flex', gap: '12px', padding: '20px 0', alignItems: 'center' }}>
           <div
             style={{
               flex: 1,
@@ -359,7 +385,42 @@ export const ProjectsPage: React.FC = () => {
         {loading ? (
           <div style={{ padding: '24px 0', color: 'var(--text-muted)' }}>Chargement...</div>
         ) : filteredProjects.length === 0 ? (
-          <div style={{ padding: '24px 0', color: 'var(--text-muted)' }}>Aucun projet trouvé.</div>
+          <div
+            style={{
+              marginTop: '24px',
+              padding: '48px',
+              border: '1px dashed var(--border)',
+              borderRadius: '16px',
+              textAlign: 'center',
+              color: 'var(--text-muted)',
+              background: 'var(--bg-card)',
+            }}
+          >
+            <h3 style={{ margin: '0 0 8px', color: 'var(--text-primary)', fontSize: '18px' }}>
+              Aucun projet trouvé
+            </h3>
+            <p style={{ margin: '0 0 18px', fontSize: '14px' }}>
+              Créez votre premier projet pour commencer à superviser vos APIs.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                resetForm()
+                setShowModal(true)
+              }}
+              style={{
+                padding: '10px 16px',
+                borderRadius: '10px',
+                border: 'none',
+                background: '#E07FA0',
+                color: '#fff',
+                cursor: 'pointer',
+                fontWeight: 700,
+              }}
+            >
+              Créer un projet
+            </button>
+          </div>
         ) : (
           <div
             style={{
@@ -403,26 +464,29 @@ export const ProjectsPage: React.FC = () => {
                       {getProjectEmoji(project.icon_key)}
                     </div>
                     <div>
-                      <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)' }}>{project.name}</div>
-                      <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{project.icon_key || 'Projet'}</div>
+                      <div
+                        style={{
+                          fontSize: '24px',
+                          fontWeight: 700,
+                          color: 'var(--text-primary)',
+                        }}
+                      >
+                        {project.name}
+                      </div>
+                      <div style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
+                        {project.icon_key || 'Projet'}
+                      </div>
                     </div>
                   </div>
-
-                  <button
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: 'var(--text-muted)',
-                      fontSize: '18px',
-                    }}
-                    title="Favori"
-                  >
-                    ☆
-                  </button>
                 </div>
 
-                <div style={{ padding: '14px 18px', color: 'var(--text-secondary)', minHeight: '52px' }}>
+                <div
+                  style={{
+                    padding: '14px 18px',
+                    color: 'var(--text-secondary)',
+                    minHeight: '52px',
+                  }}
+                >
                   {project.description || 'Sans description'}
                 </div>
 
@@ -437,48 +501,32 @@ export const ProjectsPage: React.FC = () => {
                   }}
                 >
                   <div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>ERREURS</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                      ERREURS
+                    </div>
                     <div style={{ fontSize: '18px', fontWeight: 700 }}>0</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>TRANSACTIONS</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                      TRANSACTIONS
+                    </div>
                     <div style={{ fontSize: '18px', fontWeight: 700 }}>0</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>SANTÉ</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                      SANTÉ
+                    </div>
                     <div style={{ fontSize: '18px', fontWeight: 700, color: '#10b981' }}>100%</div>
                   </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '8px', padding: '12px 18px' }}>
-                  <button
-                    onClick={() => navigate(`/projects/${project.id}`)}
-                    style={{
-                      flex: 1,
-                      padding: '10px 14px',
-                      borderRadius: '10px',
-                      border: '1px solid var(--border)',
-                      background: 'var(--bg-card)',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
-                  >
-                    ⚡ APIs
+                  <button onClick={() => navigate(`/projects/${project.id}`)} style={projectActionButtonStyle}>
+                    ⚡ Gérer les APIs
                   </button>
 
-                  <button
-                    onClick={() => handleSelectProject(project)}
-                    style={{
-                      flex: 1,
-                      padding: '10px 14px',
-                      borderRadius: '10px',
-                      border: '1px solid var(--border)',
-                      background: 'var(--bg-card)',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Sélectionner
+                  <button onClick={() => handleSelectProject(project)} style={primaryProjectActionButtonStyle}>
+                    Ouvrir dashboard
                   </button>
 
                   <button
@@ -500,17 +548,15 @@ export const ProjectsPage: React.FC = () => {
           </div>
         )}
 
-        <Modal
-          open={showModal}
-          onClose={() => setShowModal(false)}
-          title="Créer un nouveau projet"
-        >
+        <Modal open={showModal} onClose={() => setShowModal(false)} title="Créer un nouveau projet">
           <div style={{ display: 'grid', gap: '16px' }}>
             <div>
               <label style={fieldLabelStyle}>Nom du projet</label>
               <Input
                 value={formData.name}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
                 placeholder="Ex: API de paiement"
               />
             </div>
@@ -519,7 +565,9 @@ export const ProjectsPage: React.FC = () => {
               <label style={fieldLabelStyle}>Description</label>
               <Input
                 value={formData.description}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, description: e.target.value })}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
                 placeholder="Description optionnelle"
               />
             </div>
@@ -558,7 +606,7 @@ export const ProjectsPage: React.FC = () => {
             </div>
 
             <div>
-              <label style={fieldLabelStyle}>Équipe du projet (optionnel)</label>
+              <label style={fieldLabelStyle}>Équipe du projet</label>
               <select
                 value={formData.team_id}
                 onChange={(e) => setFormData({ ...formData, team_id: e.target.value })}
@@ -572,7 +620,7 @@ export const ProjectsPage: React.FC = () => {
                 ))}
               </select>
               <p style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
-                Sélectionnez une équipe pour que les membres y aient accès
+                Sélectionnez l’équipe qui aura accès à ce projet.
               </p>
             </div>
 
@@ -583,16 +631,14 @@ export const ProjectsPage: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, api_service_id: e.target.value })}
                 style={selectStyle}
               >
-                <option value="">Aucune API</option>
-                {availableApis.map((api) => (
-                  <option key={api.id} value={api.id}>
-                    {api.name}{api.project_id ? ' (déjà assignée)' : ''}
+                <option value="none">Aucune API</option>
+                {availableApis.map((apiItem) => (
+                  <option key={apiItem.id} value={apiItem.id}>
+                    {apiItem.name}
+                    {apiItem.project_id ? ' (déjà assignée)' : ''}
                   </option>
                 ))}
               </select>
-              <p style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
-                Cette API sera automatiquement liée au projet après sa création.
-              </p>
             </div>
 
             <div>
@@ -604,24 +650,13 @@ export const ProjectsPage: React.FC = () => {
                 }
                 placeholder="Ex: 9d9a3305-93f4-4f27-9c0b-e92518d3c5f0"
               />
-              <p style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
-                Si l’API n’apparaît pas dans la liste, collez son UUID ici.
-              </p>
             </div>
 
             <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-card)',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
+                style={secondaryButtonStyle}
               >
                 Annuler
               </button>
@@ -629,15 +664,7 @@ export const ProjectsPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleCreate}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-card)',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
+                style={primaryButtonStyle}
               >
                 Créer le projet
               </button>
@@ -645,17 +672,15 @@ export const ProjectsPage: React.FC = () => {
           </div>
         </Modal>
 
-        <Modal
-          open={showJoinTeamModal}
-          onClose={() => setShowJoinTeamModal(false)}
-          title="Rejoindre une équipe"
-        >
+        <Modal open={showJoinTeamModal} onClose={() => setShowJoinTeamModal(false)} title="Rejoindre une équipe">
           <div style={{ display: 'grid', gap: '16px' }}>
             <div>
               <label style={fieldLabelStyle}>Code d’équipe</label>
               <Input
                 value={joinTeamCode}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setJoinTeamCode(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setJoinTeamCode(e.target.value)
+                }
                 placeholder="Entrez le code d’invitation"
               />
             </div>
@@ -664,32 +689,12 @@ export const ProjectsPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowJoinTeamModal(false)}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-card)',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
+                style={secondaryButtonStyle}
               >
                 Annuler
               </button>
 
-              <button
-                type="button"
-                onClick={handleJoinTeam}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-card)',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
+              <button type="button" onClick={handleJoinTeam} style={primaryButtonStyle}>
                 Rejoindre
               </button>
             </div>
@@ -724,3 +729,46 @@ export const ProjectsPage: React.FC = () => {
     </Layout>
   )
 }
+
+const projectActionButtonStyle: React.CSSProperties = {
+  flex: 1,
+  padding: '10px 14px',
+  borderRadius: '10px',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-card)',
+  cursor: 'pointer',
+  fontWeight: 600,
+  color: 'var(--text-primary)',
+}
+
+const primaryProjectActionButtonStyle: React.CSSProperties = {
+  flex: 1,
+  padding: '10px 14px',
+  borderRadius: '10px',
+  border: '1px solid var(--pink-mid)',
+  background: 'var(--pink-bg)',
+  cursor: 'pointer',
+  fontWeight: 700,
+  color: 'var(--pink)',
+}
+
+const secondaryButtonStyle: React.CSSProperties = {
+  padding: '10px 16px',
+  borderRadius: '10px',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-card)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+  fontWeight: 600,
+}
+
+const primaryButtonStyle: React.CSSProperties = {
+  padding: '10px 16px',
+  borderRadius: '10px',
+  border: 'none',
+  background: '#E07FA0',
+  color: '#fff',
+  cursor: 'pointer',
+  fontWeight: 700,
+}
+

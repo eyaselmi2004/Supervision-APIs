@@ -23,6 +23,11 @@ import {
   KeyRound,
   X,
   Sparkles,
+  Brain,
+AlertTriangle,
+CheckCircle2,
+Clipboard,
+RefreshCcw,
 } from 'lucide-react'
 import { Layout } from '../components/layout/Layout'
 import { Header } from '../components/layout/Header'
@@ -119,6 +124,15 @@ const formatBucketLabel = (iso: string, period: PeriodKey): string => {
 
   return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
 }
+
+
+const formatLlmAnalysis = (analysis: string) => {
+  return analysis
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
 
 const normalizeStats = (raw: MetricsStats | null): MetricsStatsView | null => {
   if (!raw) return null
@@ -336,7 +350,15 @@ export const MetricsPage: React.FC = () => {
       isMounted = false
     }
   }, [selectedEndpoint, period, bucketInterval])
+const handleCopyLlmAnalysis = async () => {
+  if (!llmAnalysis) return
 
+  try {
+    await navigator.clipboard.writeText(llmAnalysis)
+  } catch (error) {
+    console.error('Failed to copy LLM analysis:', error)
+  }
+}
   const monitoredTokenStorageKey = (serviceId: string) => `monitored_api_token:${serviceId}`
 
   useEffect(() => {
@@ -462,37 +484,32 @@ export const MetricsPage: React.FC = () => {
   }
 
   const handleExplainIssue = async () => {
-    if (!selectedService || !selectedEndpoint || !stats) return
+  if (!selectedEndpoint) return
 
-    const selectedServiceObject = services.find((s) => s.id === selectedService)
-    const selectedEndpointObject = endpoints.find((e) => e.id === selectedEndpoint)
+  setLlmLoading(true)
+  setLlmError(null)
+  setLlmAnalysis(null)
 
-    if (!selectedServiceObject || !selectedEndpointObject) return
+  try {
+    const result = await llmService.explainEndpointIssue(
+      selectedEndpoint,
+      periodToHours(period)
+    )
 
-    setLlmLoading(true)
-    setLlmError(null)
-    setLlmAnalysis(null)
+    setLlmAnalysis(result.analysis)
+  } catch (error: any) {
+  console.error('❌ LLM explain endpoint issue error:', error)
 
-    try {
-      const result = await llmService.explainIssue({
-        service_name: selectedServiceObject.name,
-        method: selectedEndpointObject.method,
-        path: selectedEndpointObject.path,
-        avg_latency_ms: stats.avg_response_time_ms ?? 0,
-        p95_latency_ms: stats.p95_latency_ms ?? 0,
-        error_rate_percent: stats.error_rate_percent ?? 0,
-        total_requests: stats.total_requests ?? 0,
-        response_preview: testResult?.response_preview ?? '',
-      })
+  const message =
+    error?.response?.data?.detail ||
+    error?.message ||
+    'Impossible de générer une analyse IA pour cet endpoint'
 
-      setLlmAnalysis(result.analysis)
-    } catch (error) {
-      console.error('❌ LLM explain issue error:', error)
-      setLlmError(error instanceof Error ? error.message : 'Impossible de générer une analyse')
-    } finally {
-      setLlmLoading(false)
-    }
-  }
+  setLlmError(message)
+} finally {
+  setLlmLoading(false)
+}
+}
 
   const chartData = useMemo(
     () =>
@@ -821,48 +838,232 @@ export const MetricsPage: React.FC = () => {
         )}
 
         {llmAnalysis && (
-          <div
+  <section
+    style={{
+      marginTop: '16px',
+      border: '1px solid var(--border)',
+      borderRadius: '16px',
+      background:
+        'var(--background-card)',
+      boxShadow: '0 10px 30px rgba(15, 23, 42, 0.06)',
+      overflow: 'hidden',
+    }}
+  >
+    <div
+      style={{
+        padding: '18px 20px',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '16px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div
+          style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '12px',
+            background: 'var(--pink-mid)',
+            color: '#ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 8px 18px rgba(185, 71, 115, 0.18)',
+          }}
+        >
+          <Sparkles size={20} />
+        </div>
+
+        <div>
+          <h3
             style={{
-              marginBottom: '16px',
-              padding: '16px',
-              borderRadius: '12px',
-              border: '1px solid var(--border)',
-              background: 'var(--bg-card)',
+              margin: 0,
+              fontSize: '16px',
+              fontWeight: 800,
+              color: 'var(--text-primary)',
             }}
           >
-            <div style={{ fontWeight: 700, marginBottom: '8px' }}>LLM analysis</div>
+            AI Issue Analysis
+          </h3>
+          <p
+            style={{
+              margin: '4px 0 0',
+              fontSize: '12px',
+              color: '#6b7280',
+            }}
+          >
+            Generated from endpoint metrics, status codes, failures and alerts
+          </p>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button
+          type="button"
+          onClick={handleCopyLlmAnalysis}
+          style={{
+            border: '1px solid var(--border)',
+            background: '#ffffff',
+            color: '#374151',
+            borderRadius: '10px',
+            padding: '8px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '12px',
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          <Clipboard size={14} />
+          Copy
+        </button>
+
+        <button
+          type="button"
+          onClick={handleExplainIssue}
+          disabled={llmLoading}
+          style={{
+            border: '1px solid var(--border)',
+            background: '#ffffff',
+            color: '#374151',
+            borderRadius: '10px',
+            padding: '8px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '12px',
+            fontWeight: 700,
+            cursor: llmLoading ? 'not-allowed' : 'pointer',
+            opacity: llmLoading ? 0.6 : 1,
+          }}
+        >
+          <RefreshCcw size={14} />
+          Regenerate
+        </button>
+      </div>
+    </div>
+
+    <div
+      style={{
+        padding: '20px',
+        display: 'grid',
+        gap: '12px',
+      }}
+    >
+      {formatLlmAnalysis(llmAnalysis).map((line, index) => {
+        const isTitle = /^\d+\./.test(line)
+        const isBullet = line.startsWith('-')
+        const lower = line.toLowerCase()
+
+        let Icon = Brain
+        let accentColor = '#8b5cf6'
+
+        if (lower.includes('abnormal') || lower.includes('severity')) {
+          Icon = AlertTriangle
+          accentColor = '#f59e0b'
+        }
+
+        if (lower.includes('recommended') || lower.includes('check')) {
+          Icon = CheckCircle2
+          accentColor = '#10b981'
+        }
+
+        if (lower.includes('summary')) {
+          Icon = Sparkles
+          accentColor = '#a855f7'
+        }
+
+        if (isTitle) {
+          return (
             <div
+              key={`${line}-${index}`}
               style={{
-                whiteSpace: 'pre-wrap',
-                color: 'var(--text-primary)',
-                fontSize: '14px',
-                lineHeight: 1.6,
+                marginTop: index === 0 ? 0 : '8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
               }}
             >
-              {llmAnalysis}
-            </div>
-          </div>
-        )}
+              <div
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '8px',
+                  background: `${accentColor}18`,
+                  color: accentColor,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Icon size={16} />
+              </div>
 
-        {metricsError && (
+              <h4
+                style={{
+                  margin: 0,
+                  fontSize: '14px',
+                  fontWeight: 800,
+                  color: 'var(--text-primary)',
+                }}
+              >
+                {line.replace(/^\d+\.\s*/, '')}
+              </h4>
+            </div>
+          )
+        }
+
+        return (
           <div
+            key={`${line}-${index}`}
             style={{
-              marginBottom: '16px',
-              padding: '12px 14px',
+              marginLeft: isBullet ? '38px' : '38px',
+              padding: isBullet ? '8px 12px' : '4px 0',
               borderRadius: '10px',
-              border: '1px solid rgba(239,68,68,0.25)',
-              background: 'rgba(239,68,68,0.08)',
-              color: '#fca5a5',
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
+              background: isBullet ? '#ffffff' : 'transparent',
+              border: isBullet ? '1px solid #f3f4f6' : 'none',
+              color: '#374151',
+              fontSize: '13px',
+              lineHeight: 1.65,
             }}
           >
-            <AlertCircle size={14} />
-            {metricsError}
+            {isBullet ? line.replace(/^-+\s*/, '') : line}
           </div>
-        )}
+        )
+      })}
+    </div>
+  </section>
+)}
+
+        {llmError && (
+  <div
+    style={{
+      marginTop: '16px',
+      border: '1px solid #fecaca',
+      background: '#fef2f2',
+      color: '#991b1b',
+      borderRadius: '14px',
+      padding: '14px 16px',
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '10px',
+      fontSize: '13px',
+      lineHeight: 1.5,
+    }}
+  >
+    <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: '1px' }} />
+    <div>
+      <strong style={{ display: 'block', marginBottom: '4px' }}>
+        AI analysis failed
+      </strong>
+      <span>{llmError}</span>
+    </div>
+  </div>
+)}
 
         <div
           style={{

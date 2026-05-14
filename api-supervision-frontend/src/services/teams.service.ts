@@ -92,4 +92,10 @@ export const teamsService = {
     const response = await api.get('/teams/invitations/pending')
     return response.data
   },
+  createJoinRequest: async (inviteCode: string) => {
+  const response = await api.post('/teams/join-requests', {
+    invite_code: inviteCode,
+  })
+  return response.data
+},
 }

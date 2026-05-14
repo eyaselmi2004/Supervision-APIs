@@ -35,6 +35,8 @@ SQL_FILES = [
     "011_add_team_id_to_projects.sql",
     "012_deduplicate_endpoints.sql",
     "013_fix_endpoints_unique.sql",
+    "014_add_team_join_requests.sql",
+    "015_add_email_verification.sql",
 ]
 
 

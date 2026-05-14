@@ -1,19 +1,25 @@
 from typing import List, Optional
 from uuid import UUID
 import time
+
+import asyncpg
 import httpx
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-import asyncpg
-import httpx
-from app.schemas.schemas import MonitoredApiLoginRequest, MonitoredApiLoginResponse
+
 from app.core.database import get_conn
 from app.core.security import get_current_user_id
 from app.repositories.api_service_repository import ApiServiceRepository
 from app.schemas.schemas import (
-    ApiServiceCreate, ApiServiceUpdate, ApiServiceResponse,
-    ApiServiceDetailResponse, EndpointCreate, EndpointResponse,
+    ApiServiceCreate,
+    ApiServiceUpdate,
+    ApiServiceResponse,
+    ApiServiceDetailResponse,
+    EndpointCreate,
+    EndpointResponse,
     MessageResponse,
+    MonitoredApiLoginRequest,
+    MonitoredApiLoginResponse,
 )
 
 router = APIRouter(prefix="/api-services", tags=["API Services"])
@@ -24,13 +30,107 @@ class EndpointTestRequest(BaseModel):
     query_params: dict[str, str] | None = None
     json_body: dict | list | None = None
 
+
+async def is_global_admin(conn: asyncpg.Connection, user_id: str) -> bool:
+    role = await conn.fetchval(
+        """
+        SELECT role
+        FROM users
+        WHERE id = $1
+        """,
+        UUID(user_id),
+    )
+    return str(role).upper() == "ADMIN"
+
+
+async def can_access_project(
+    conn: asyncpg.Connection,
+    project_id: UUID,
+    user_id: str,
+) -> bool:
+    if await is_global_admin(conn, user_id):
+        return True
+
+    allowed = await conn.fetchval(
+        """
+        SELECT 1
+        FROM projects p
+        LEFT JOIN team_members tm ON tm.team_id = p.team_id
+        WHERE p.id = $1
+          AND (
+            p.owner_id = $2
+            OR tm.user_id = $2
+          )
+        """,
+        project_id,
+        UUID(user_id),
+    )
+
+    return bool(allowed)
+
+
+async def can_access_service(
+    conn: asyncpg.Connection,
+    service_id: UUID,
+    user_id: str,
+) -> bool:
+    if await is_global_admin(conn, user_id):
+        return True
+
+    allowed = await conn.fetchval(
+        """
+        SELECT 1
+        FROM api_services aps
+        JOIN projects p ON aps.project_id = p.id
+        LEFT JOIN team_members tm ON tm.team_id = p.team_id
+        WHERE aps.id = $1
+          AND (
+            p.owner_id = $2
+            OR tm.user_id = $2
+          )
+        """,
+        service_id,
+        UUID(user_id),
+    )
+
+    return bool(allowed)
+
+
 @router.get("", response_model=List[ApiServiceResponse])
 async def list_services(
     project_id: Optional[UUID] = Query(None),
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
-    rows = await ApiServiceRepository(conn).get_all(project_id=project_id)
+    if await is_global_admin(conn, user_id):
+        rows = await ApiServiceRepository(conn).get_all(project_id=project_id)
+        return [dict(r) for r in rows]
+
+    if project_id:
+        allowed = await can_access_project(conn, project_id, user_id)
+        if not allowed:
+            return []
+
+    query = """
+        SELECT DISTINCT aps.*
+        FROM api_services aps
+        JOIN projects p ON aps.project_id = p.id
+        LEFT JOIN team_members tm ON tm.team_id = p.team_id
+        WHERE (
+            p.owner_id = $1
+            OR tm.user_id = $1
+        )
+    """
+
+    params = [UUID(user_id)]
+
+    if project_id:
+        query += " AND aps.project_id = $2"
+        params.append(project_id)
+
+    query += " ORDER BY aps.created_at DESC"
+
+    rows = await conn.fetch(query, *params)
     return [dict(r) for r in rows]
 
 
@@ -38,14 +138,23 @@ async def list_services(
 async def create_service(
     data: ApiServiceCreate,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    if data.project_id:
+        allowed = await can_access_project(conn, data.project_id, user_id)
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Vous n'avez pas accès à ce projet",
+            )
+
     row = await ApiServiceRepository(conn).create(
         data.name,
         data.base_url,
         data.is_active,
         data.project_id,
     )
+
     return dict(row)
 
 
@@ -53,16 +162,23 @@ async def create_service(
 async def get_service(
     service_id: UUID,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
     repo = ApiServiceRepository(conn)
     service = await repo.get_by_id(service_id)
+
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
 
     endpoints = await repo.get_endpoints(service_id)
+
     result = dict(service)
     result["endpoints"] = [dict(e) for e in endpoints]
+
     return result
 
 
@@ -71,8 +187,20 @@ async def update_service(
     service_id: UUID,
     data: ApiServiceUpdate,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
+    if data.project_id:
+        project_allowed = await can_access_project(conn, data.project_id, user_id)
+        if not project_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Vous n'avez pas accès au projet cible",
+            )
+
     row = await ApiServiceRepository(conn).update(
         service_id,
         data.name,
@@ -80,8 +208,10 @@ async def update_service(
         data.is_active,
         data.project_id,
     )
+
     if not row:
         raise HTTPException(status_code=404, detail="Service introuvable")
+
     return dict(row)
 
 
@@ -89,11 +219,17 @@ async def update_service(
 async def delete_service(
     service_id: UUID,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
     deleted = await ApiServiceRepository(conn).delete(service_id)
+
     if not deleted:
         raise HTTPException(status_code=404, detail="Service introuvable")
+
     return MessageResponse(message="Service supprimé")
 
 
@@ -101,8 +237,12 @@ async def delete_service(
 async def list_endpoints(
     service_id: UUID,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
     rows = await ApiServiceRepository(conn).get_endpoints(service_id)
     return [dict(r) for r in rows]
 
@@ -112,24 +252,41 @@ async def create_endpoint(
     service_id: UUID,
     data: EndpointCreate,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
     repo = ApiServiceRepository(conn)
     service = await repo.get_by_id(service_id)
+
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
 
-    row = await repo.create_endpoint(service_id, data.path, data.method.value, data.is_active)
+    row = await repo.create_endpoint(
+        service_id,
+        data.path,
+        data.method.value,
+        data.is_active,
+    )
+
     return dict(row)
+
 
 @router.post("/{service_id}/discover-endpoints")
 async def discover_endpoints(
     service_id: UUID,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
     repo = ApiServiceRepository(conn)
     service = await repo.get_by_id(service_id)
+
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
 
@@ -148,8 +305,10 @@ async def discover_endpoints(
         for url in openapi_candidates:
             try:
                 response = await client.get(url)
+
                 if response.status_code == 200:
                     data = response.json()
+
                     if isinstance(data, dict) and "paths" in data:
                         openapi_data = data
                         break
@@ -159,7 +318,10 @@ async def discover_endpoints(
     if not openapi_data:
         raise HTTPException(
             status_code=400,
-            detail=f"Impossible de charger le fichier OpenAPI pour {base_url}. Dernière erreur: {last_error}",
+            detail=(
+                f"Impossible de charger le fichier OpenAPI pour {base_url}. "
+                f"Dernière erreur: {last_error}"
+            ),
         )
 
     paths = openapi_data.get("paths", {})
@@ -172,7 +334,7 @@ async def discover_endpoints(
         if not isinstance(operations, dict):
             continue
 
-        for method_name, operation in operations.items():
+        for method_name in operations.keys():
             if method_name.lower() not in allowed_methods:
                 continue
 
@@ -180,6 +342,7 @@ async def discover_endpoints(
             method = method_name.upper()
 
             existing = await repo.find_endpoint(service_id, path, method)
+
             if existing:
                 continue
 
@@ -201,22 +364,27 @@ async def test_endpoint(
     endpoint_id: UUID,
     payload: EndpointTestRequest | None = None,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
     repo = ApiServiceRepository(conn)
 
     service = await repo.get_by_id(service_id)
+
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
 
     endpoint = await repo.get_endpoint_by_id(endpoint_id)
+
     if not endpoint or endpoint["api_service_id"] != service_id:
         raise HTTPException(status_code=404, detail="Endpoint introuvable")
 
     base_url = str(service["base_url"]).rstrip("/")
     path = str(endpoint["path"])
     method = str(endpoint["method"]).upper()
-
     url = f"{base_url}{path}"
 
     headers = payload.headers if payload and payload.headers else {}
@@ -239,7 +407,13 @@ async def test_endpoint(
 
         await conn.execute(
             """
-            INSERT INTO api_metrics (endpoint_id, timestamp, response_time_ms, status_code, success)
+            INSERT INTO api_metrics (
+                endpoint_id,
+                timestamp,
+                response_time_ms,
+                status_code,
+                success
+            )
             VALUES ($1, NOW(), $2, $3, $4)
             """,
             endpoint_id,
@@ -247,8 +421,6 @@ async def test_endpoint(
             response.status_code,
             response.status_code < 400,
         )
-
-        response_preview = response.text[:1000] if response.text else ""
 
         return {
             "service_id": str(service_id),
@@ -258,12 +430,11 @@ async def test_endpoint(
             "status_code": response.status_code,
             "success": response.status_code < 400,
             "response_time_ms": elapsed_ms,
-            "response_preview": response_preview,
+            "response_preview": response.text[:1000] if response.text else "",
         }
 
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Test failed: {exc}") from exc
-
 
 
 @router.post("/{service_id}/auth/login", response_model=MonitoredApiLoginResponse)
@@ -271,10 +442,15 @@ async def login_to_monitored_api(
     service_id: UUID,
     data: MonitoredApiLoginRequest,
     conn: asyncpg.Connection = Depends(get_conn),
-    _: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
+    allowed = await can_access_service(conn, service_id, user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Accès refusé à cette API")
+
     repo = ApiServiceRepository(conn)
     service = await repo.get_by_id(service_id)
+
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
 
@@ -322,5 +498,9 @@ async def login_to_monitored_api(
 
     except HTTPException:
         raise
+
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Impossible de se connecter à l'API monitorée: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible de se connecter à l'API monitorée: {exc}",
+        ) from exc

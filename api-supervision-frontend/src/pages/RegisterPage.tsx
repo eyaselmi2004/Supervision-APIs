@@ -1,14 +1,14 @@
 import React, { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertCircle, ArrowLeft, CheckCircle2, Lock, Mail, ShieldCheck } from 'lucide-react'
-import { authService } from '../services/auth.service'
+import { AlertCircle, ArrowLeft, CheckCircle2, Lock, Mail, ShieldCheck, User } from 'lucide-react'
+import api from '../services/api'
 
-export const LoginPage: React.FC = () => {
+export const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const redirect = searchParams.get('redirect')
 
-  const [form, setForm] = useState({ email: '', password: '' })
+  const [form, setForm] = useState({ name: '', email: '', password: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -18,17 +18,21 @@ export const LoginPage: React.FC = () => {
     setLoading(true)
 
     try {
-      await authService.login(form)
-      navigate(redirect || '/dashboard')
+      await api.post('/auth/register', {
+        name: form.name,
+        email: form.email,
+        password: form.password,
+      })
+      navigate(redirect ? `/login?redirect=${encodeURIComponent(redirect)}` : '/login')
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Email ou mot de passe incorrect')
+      setError(err.response?.data?.detail ?? 'Erreur lors de la création du compte')
     } finally {
       setLoading(false)
     }
   }
 
-  const goToRegister = () => {
-    navigate(redirect ? `/register?redirect=${encodeURIComponent(redirect)}` : '/register')
+  const goToLogin = () => {
+    navigate(redirect ? `/login?redirect=${encodeURIComponent(redirect)}` : '/login')
   }
 
   return (
@@ -50,30 +54,43 @@ export const LoginPage: React.FC = () => {
 
       <main className="auth-shell">
         <section className="auth-info-panel">
-          <div className="auth-eyebrow">Secure access</div>
-          <h1>Welcome back to your supervision workspace.</h1>
+          <div className="auth-eyebrow">Start supervision</div>
+          <h1>Create a workspace for reliable API operations.</h1>
           <p>
-            Continue monitoring API health, active alerts, incidents and SLA indicators from one central platform.
+            Set up your account, create projects and start tracking API health, metrics and incidents with a clean workflow.
           </p>
 
           <div className="auth-benefits">
-            <div><ShieldCheck size={16} /><span>JWT secured authentication</span></div>
-            <div><CheckCircle2 size={16} /><span>Project and team-based access</span></div>
-            <div><Lock size={16} /><span>Operational data protected by role</span></div>
+            <div><CheckCircle2 size={16} /><span>Register monitored APIs quickly</span></div>
+            <div><ShieldCheck size={16} /><span>Organize work by projects and teams</span></div>
+            <div><Lock size={16} /><span>Secure access for technical users</span></div>
           </div>
         </section>
 
-        <section className="auth-card" aria-label="Login form">
+        <section className="auth-card" aria-label="Register form">
           <div className="auth-card-heading">
-            <h2>Sign in</h2>
+            <h2>Create account</h2>
             <p>
               {redirect
-                ? 'Connectez-vous pour accepter votre invitation.'
-                : 'Enter your credentials to access Traceon.'}
+                ? 'Créez votre compte avec le même email que celui de l’invitation.'
+                : 'Start monitoring your APIs with Traceon.'}
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="auth-form">
+            <label>
+              <span>Name</span>
+              <div className="auth-input-wrap">
+                <User size={16} />
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Your name"
+                  required
+                />
+              </div>
+            </label>
+
             <label>
               <span>Email</span>
               <div className="auth-input-wrap">
@@ -96,8 +113,9 @@ export const LoginPage: React.FC = () => {
                   type="password"
                   value={form.password}
                   onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
-                  placeholder="Your password"
+                  placeholder="Minimum 6 characters"
                   required
+                  minLength={6}
                 />
               </div>
             </label>
@@ -110,16 +128,16 @@ export const LoginPage: React.FC = () => {
             )}
 
             <button type="submit" className="auth-primary" disabled={loading}>
-              {loading ? 'Signing in...' : 'Sign in'}
+              {loading ? 'Creating account...' : 'Create account'}
             </button>
           </form>
 
           <div className="auth-switch">
-            Don’t have an account? <button onClick={goToRegister}>Create one</button>
+            Already have an account? <button onClick={goToLogin}>Sign in</button>
           </div>
 
           {redirect && (
-            <p className="auth-note">Utilise le même email que celui qui a reçu l’invitation.</p>
+            <p className="auth-note">Après connexion, vous serez redirigé automatiquement vers l’invitation.</p>
           )}
         </section>
       </main>
@@ -195,9 +213,7 @@ const authStyles = `
   align-items: center;
   padding: 48px 0;
 }
-.auth-info-panel {
-  max-width: 560px;
-}
+.auth-info-panel { max-width: 560px; }
 .auth-eyebrow {
   width: fit-content;
   border: 1px solid var(--border);

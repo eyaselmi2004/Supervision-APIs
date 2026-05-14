@@ -6,16 +6,9 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => (
-  <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-main)' }}>
+  <div className="app-shell">
     <Sidebar />
-    <main style={{
-      flex: 1,
-      marginLeft: 240,
-      overflowY: 'auto',
-      background: 'var(--bg-main)',
-      minHeight: '100vh',
-      transition: 'background 0.25s ease',
-    }}>
+    <main className="app-main">
       {children}
     </main>
   </div>
