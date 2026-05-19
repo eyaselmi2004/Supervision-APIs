@@ -172,3 +172,40 @@ Contexte de l'incident :
             raise RuntimeError(
                 f"Echec de l'analyse LLM de l'incident: {type(exc).__name__}: {exc}"
             ) from exc
+
+    async def correlate_alerts(self, alerts: list[dict]) -> str:
+        alerts_json = json.dumps(alerts, indent=2, default=str)
+
+        prompt = f"""
+Analyse ces alertes de supervision ensemble afin de détecter si elles semblent corrélées
+ou liées à une même cause racine.
+
+Réponds uniquement en français.
+
+Utilise exactement cette structure :
+
+1. Résumé global
+2. Alertes corrélées
+3. Cause racine probable
+4. Impact potentiel
+5. Priorité recommandée
+6. Actions recommandées
+
+Règles :
+- N'invente aucune information absente des alertes fournies.
+- Détecte les similarités : même endpoint, même API, même code HTTP, même statut, même période temporelle, même règle ou même pattern d'erreur.
+- Sépare clairement les faits confirmés des hypothèses.
+- Si aucune corrélation claire n'existe, indique-le explicitement.
+- Sois concis, professionnel et orienté DevOps/SRE.
+- Donne des actions concrètes et directement applicables.
+
+Alertes à analyser :
+{alerts_json}
+"""
+
+        try:
+            return await self._ask_llm(prompt)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Echec de la corrélation IA des alertes: {type(exc).__name__}: {exc}"
+            ) from exc

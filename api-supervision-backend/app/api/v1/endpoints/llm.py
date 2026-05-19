@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 import asyncpg
 
 from app.core.database import get_conn
@@ -16,6 +17,10 @@ from app.services.llm_service import LLMService
 from app.services.llm_context_service import LLMContextService
 
 router = APIRouter(prefix="/llm", tags=["LLM"])
+
+
+class CorrelateAlertsRequest(BaseModel):
+    alerts: list[dict]
 
 
 @router.post("/explain-issue", response_model=ExplainIssueResponse)
@@ -132,4 +137,30 @@ async def explain_incident(
         raise HTTPException(
             status_code=500,
             detail=f"LLM incident explanation error: {exc}",
+        ) from exc
+
+@router.post("/correlate-alerts")
+async def correlate_alerts(
+    data: CorrelateAlertsRequest,
+    _: str = Depends(get_current_user_id),
+):
+    try:
+        if len(data.alerts) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Au moins deux alertes sont nécessaires pour lancer une corrélation IA.",
+            )
+
+        analysis = await LLMService().correlate_alerts(data.alerts)
+
+        return {
+            "analysis": analysis,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"LLM alerts correlation error: {exc}",
         ) from exc

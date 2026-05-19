@@ -1,33 +1,43 @@
 /**
  * auth.service.ts — Appels API authentification
- * Gère login, register et logout
+ * Gère login, register, logout et OAuth
  */
 import api from './api'
 import type { LoginRequest, RegisterRequest, TokenResponse, UserResponse } from '../types'
 
-export const authService = {
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'
 
-  // Connexion — stocke les tokens dans localStorage
+export const authService = {
   async login(data: LoginRequest): Promise<TokenResponse> {
     const res = await api.post<TokenResponse>('/auth/login', data)
-    localStorage.setItem('access_token',  res.data.access_token)
+    localStorage.setItem('access_token', res.data.access_token)
     localStorage.setItem('refresh_token', res.data.refresh_token)
     return res.data
   },
 
-  // Inscription — crée un nouveau compte
   async register(data: RegisterRequest): Promise<UserResponse> {
     const res = await api.post<UserResponse>('/auth/register', data)
     return res.data
   },
 
-  // Déconnexion — vide le localStorage
+  loginWithGoogle(): void {
+    window.location.href = `${API_BASE_URL}/oauth/google/login`
+  },
+
+  loginWithGithub(): void {
+    window.location.href = `${API_BASE_URL}/oauth/github/login`
+  },
+
+  saveOAuthTokens(accessToken: string, refreshToken: string): void {
+    localStorage.setItem('access_token', accessToken)
+    localStorage.setItem('refresh_token', refreshToken)
+  },
+
   logout(): void {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
   },
 
-  // Vérifie si l'utilisateur est connecté
   isAuthenticated(): boolean {
     return !!localStorage.getItem('access_token')
   },

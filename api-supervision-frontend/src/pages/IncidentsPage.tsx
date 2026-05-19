@@ -30,6 +30,61 @@ const PRIORITE_FR: Record<string, string> = {
   RESOLVED: 'Clôturé',
 }
 
+
+type AiSection = {
+  title: string
+  content: string[]
+}
+
+const parseAiAnalysis = (analysis: string): AiSection[] => {
+  if (!analysis.trim()) return []
+
+  const lines = analysis
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  const sections: AiSection[] = []
+  let current: AiSection | null = null
+
+  lines.forEach((line) => {
+    const titleMatch = line.match(/^\d+[.)]\s*(.+?)\s*:?$/)
+
+    if (titleMatch) {
+      if (current) sections.push(current)
+      current = {
+        title: titleMatch[1],
+        content: [],
+      }
+      return
+    }
+
+    if (!current) {
+      current = {
+        title: 'Analyse',
+        content: [],
+      }
+    }
+
+    current.content.push(line.replace(/^[-•]\s*/, ''))
+  })
+
+  if (current) sections.push(current)
+
+  return sections
+}
+
+const getSectionTone = (title: string) => {
+  const normalized = title.toLowerCase()
+
+  if (normalized.includes('cause')) return { color: '#f59e0b', bg: 'rgba(245,158,11,0.09)', border: 'rgba(245,158,11,0.24)' }
+  if (normalized.includes('impact') || normalized.includes('sévérité')) return { color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.22)' }
+  if (normalized.includes('résolution') || normalized.includes('recommand') || normalized.includes('prévention')) return { color: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.22)' }
+  if (normalized.includes('confirm')) return { color: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.22)' }
+
+  return { color: '#d946ef', bg: 'rgba(217,70,239,0.08)', border: 'rgba(217,70,239,0.22)' }
+}
+
 export const IncidentsPage: React.FC = () => {
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [services, setServices] = useState<ApiService[]>([])
@@ -185,6 +240,7 @@ export const IncidentsPage: React.FC = () => {
 
   const openCount = incidents.filter((incident) => incident.status === 'OPEN').length
   const resolvedCount = incidents.filter((incident) => incident.status === 'RESOLVED').length
+  const aiSections = parseAiAnalysis(aiAnalysis)
 
   return (
     <Layout>
@@ -876,48 +932,137 @@ export const IncidentsPage: React.FC = () => {
       <Modal
         open={showAiModal}
         onClose={() => setShowAiModal(false)}
-        title="AI Root Cause Analysis"
+        title="Analyse IA de l’incident"
         size="lg"
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            maxHeight: '78vh',
+          }}
+        >
           {selectedIncident && (
             <div
               style={{
-                padding: '14px',
-                borderRadius: '12px',
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border)',
+                padding: '16px',
+                borderRadius: '16px',
+                background: 'linear-gradient(180deg, rgba(217,70,239,0.10), rgba(15,23,42,0.02))',
+                border: '1px solid rgba(217,70,239,0.22)',
               }}
             >
               <div
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   justifyContent: 'space-between',
-                  gap: '12px',
+                  gap: '14px',
                 }}
               >
-                <div>
-                  <p
+                <div style={{ display: 'flex', gap: '12px', minWidth: 0 }}>
+                  <div
                     style={{
-                      margin: 0,
-                      fontSize: '14px',
-                      fontWeight: 800,
-                      color: 'var(--text-primary)',
+                      width: 42,
+                      height: 42,
+                      borderRadius: 12,
+                      background: 'rgba(217,70,239,0.16)',
+                      border: '1px solid rgba(217,70,239,0.28)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
                     }}
                   >
-                    {selectedIncident.title}
-                  </p>
+                    <BrainCircuit size={20} color="#d946ef" />
+                  </div>
 
-                  <p
-                    style={{
-                      margin: '4px 0 0',
-                      fontSize: '12px',
-                      color: 'var(--text-subtle)',
-                    }}
-                  >
-                    API impactée : {getServiceName(selectedIncident.api_service_id)}
-                  </p>
+                  <div style={{ minWidth: 0 }}>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        letterSpacing: '0.1em',
+                        textTransform: 'uppercase',
+                        color: '#d946ef',
+                      }}
+                    >
+                      Root Cause Analysis
+                    </p>
+
+                    <h3
+                      style={{
+                        margin: '5px 0 0',
+                        fontSize: '16px',
+                        fontWeight: 800,
+                        color: 'var(--text-primary)',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {selectedIncident.title}
+                    </h3>
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        flexWrap: 'wrap',
+                        marginTop: '10px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 999,
+                          background: 'var(--bg-secondary)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text-muted)',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        API : {getServiceName(selectedIncident.api_service_id)}
+                      </span>
+
+                      <span
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 999,
+                          background:
+                            selectedIncident.status === 'OPEN'
+                              ? 'rgba(239,68,68,0.12)'
+                              : 'rgba(16,185,129,0.12)',
+                          border:
+                            selectedIncident.status === 'OPEN'
+                              ? '1px solid rgba(239,68,68,0.25)'
+                              : '1px solid rgba(16,185,129,0.25)',
+                          color: selectedIncident.status === 'OPEN' ? '#f87171' : '#34d399',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                        }}
+                      >
+                        {STATUT_FR[selectedIncident.status] || selectedIncident.status}
+                      </span>
+
+                      <span
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 999,
+                          background: 'var(--bg-secondary)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text-muted)',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        Durée : {formatDuration(selectedIncident)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 <button
@@ -925,11 +1070,15 @@ export const IncidentsPage: React.FC = () => {
                   style={{
                     width: 34,
                     height: 34,
-                    borderRadius: 8,
+                    borderRadius: 10,
                     border: '1px solid var(--border)',
-                    background: 'transparent',
+                    background: 'var(--bg-card)',
                     color: 'var(--text-muted)',
                     cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
                   }}
                 >
                   <X size={16} />
@@ -941,20 +1090,34 @@ export const IncidentsPage: React.FC = () => {
           {aiLoading ? (
             <div
               style={{
-                padding: '32px',
+                padding: '34px',
                 textAlign: 'center',
-                borderRadius: '12px',
-                border: '1px solid var(--border)',
+                borderRadius: '16px',
+                border: '1px solid rgba(217,70,239,0.20)',
                 background: 'var(--bg-card)',
               }}
             >
-              <BrainCircuit size={34} color="#d946ef" style={{ marginBottom: 12 }} />
+              <div
+                style={{
+                  width: 54,
+                  height: 54,
+                  borderRadius: 18,
+                  background: 'rgba(217,70,239,0.12)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 14px',
+                }}
+              >
+                <BrainCircuit size={28} color="#d946ef" />
+              </div>
+
               <p
                 style={{
                   margin: 0,
-                  fontSize: '14px',
+                  fontSize: '15px',
                   color: 'var(--text-primary)',
-                  fontWeight: 700,
+                  fontWeight: 800,
                 }}
               >
                 Analyse IA en cours...
@@ -962,19 +1125,37 @@ export const IncidentsPage: React.FC = () => {
 
               <p
                 style={{
-                  margin: '6px 0 0',
+                  margin: '8px auto 0',
+                  maxWidth: 460,
                   fontSize: '12px',
                   color: 'var(--text-subtle)',
+                  lineHeight: 1.7,
                 }}
               >
-                L’IA analyse les métriques, les alertes et les endpoints liés à cet incident.
+                Traceon analyse les métriques, alertes et événements liés pour proposer une cause racine probable.
               </p>
+
+              <div
+                style={{
+                  marginTop: '20px',
+                  display: 'grid',
+                  gap: '10px',
+                }}
+              >
+                {[...Array(4)].map((_, index) => (
+                  <div
+                    key={index}
+                    className="skeleton"
+                    style={{ height: 46, borderRadius: 12 }}
+                  />
+                ))}
+              </div>
             </div>
           ) : aiError ? (
             <div
               style={{
-                padding: '14px',
-                borderRadius: '12px',
+                padding: '16px',
+                borderRadius: '14px',
                 border: '1px solid rgba(239,68,68,0.25)',
                 background: 'rgba(239,68,68,0.08)',
                 color: '#fca5a5',
@@ -988,38 +1169,168 @@ export const IncidentsPage: React.FC = () => {
             <>
               <div
                 style={{
-                  padding: '16px',
-                  borderRadius: '12px',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border)',
-                  maxHeight: '520px',
+                  flex: 1,
+                  minHeight: 0,
+                  maxHeight: '52vh',
                   overflowY: 'auto',
-                  whiteSpace: 'pre-wrap',
-                  color: 'var(--text-primary)',
-                  fontSize: '13px',
-                  lineHeight: 1.8,
+                  paddingRight: '4px',
+                  display: 'grid',
+                  gap: '12px',
                 }}
               >
-                {aiAnalysis || 'Aucune analyse disponible.'}
+                {aiSections.length === 0 ? (
+                  <div
+                    style={{
+                      padding: '18px',
+                      borderRadius: '14px',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-muted)',
+                      fontSize: '13px',
+                    }}
+                  >
+                    Aucune analyse disponible.
+                  </div>
+                ) : (
+                  aiSections.map((section, index) => {
+                    const tone = getSectionTone(section.title)
+
+                    return (
+                      <div
+                        key={`${section.title}-${index}`}
+                        style={{
+                          padding: '16px',
+                          borderRadius: '14px',
+                          background: 'var(--bg-card)',
+                          border: '1px solid var(--border)',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            marginBottom: '12px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 9,
+                              background: tone.bg,
+                              border: `1px solid ${tone.border}`,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: tone.color,
+                              fontSize: '12px',
+                              fontWeight: 900,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {index + 1}
+                          </div>
+
+                          <h4
+                            style={{
+                              margin: 0,
+                              fontSize: '13px',
+                              fontWeight: 800,
+                              color: 'var(--text-primary)',
+                            }}
+                          >
+                            {section.title}
+                          </h4>
+                        </div>
+
+                        <div style={{ display: 'grid', gap: '8px' }}>
+                          {section.content.length === 0 ? (
+                            <p
+                              style={{
+                                margin: 0,
+                                color: 'var(--text-muted)',
+                                fontSize: '13px',
+                              }}
+                            >
+                              Aucun détail fourni.
+                            </p>
+                          ) : (
+                            section.content.map((item, itemIndex) => (
+                              <div
+                                key={`${section.title}-${itemIndex}`}
+                                style={{
+                                  display: 'flex',
+                                  gap: '9px',
+                                  alignItems: 'flex-start',
+                                  padding: '9px 10px',
+                                  borderRadius: '10px',
+                                  background: 'var(--bg-secondary)',
+                                  border: '1px solid var(--border)',
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    width: 6,
+                                    height: 6,
+                                    borderRadius: '50%',
+                                    background: tone.color,
+                                    marginTop: 7,
+                                    flexShrink: 0,
+                                  }}
+                                />
+
+                                <p
+                                  style={{
+                                    margin: 0,
+                                    color: 'var(--text-muted)',
+                                    fontSize: '13px',
+                                    lineHeight: 1.65,
+                                  }}
+                                >
+                                  {item}
+                                </p>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
               </div>
 
               <div
                 style={{
                   display: 'flex',
-                  justifyContent: 'flex-end',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
                   gap: '10px',
+                  paddingTop: '12px',
+                  borderTop: '1px solid var(--border)',
                 }}
               >
-                <Button
-                  variant="secondary"
-                  icon={Copy}
-                  onClick={handleCopyAiAnalysis}
-                  disabled={!aiAnalysis}
+                <span
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-subtle)',
+                  }}
                 >
-                  Copier l’analyse
-                </Button>
+                  Analyse générée par IA locale. À valider avec les logs et les métriques réelles.
+                </span>
 
-                <Button onClick={() => setShowAiModal(false)}>Fermer</Button>
+                <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
+                  <Button
+                    variant="secondary"
+                    icon={Copy}
+                    onClick={handleCopyAiAnalysis}
+                    disabled={!aiAnalysis}
+                  >
+                    Copier
+                  </Button>
+
+                  <Button onClick={() => setShowAiModal(false)}>Fermer</Button>
+                </div>
               </div>
             </>
           )}

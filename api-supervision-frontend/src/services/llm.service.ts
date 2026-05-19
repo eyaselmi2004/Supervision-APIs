@@ -25,6 +25,10 @@ export interface ExplainIncidentResponse {
   analysis: string
 }
 
+export interface CorrelateAlertsResponse {
+  analysis: string
+}
+
 export const llmService = {
   async explainIssue(payload: ExplainIssuePayload): Promise<ExplainIssueResponse> {
     const res = await api.post<ExplainIssueResponse>('/llm/explain-issue', payload)
@@ -49,6 +53,14 @@ export const llmService = {
     const res = await api.post<ExplainIncidentResponse>(
       `/llm/explain-incident/${incidentId}`,
     )
+
+    return res.data
+  },
+
+  async correlateAlerts(alerts: Record<string, any>[]): Promise<CorrelateAlertsResponse> {
+    const res = await api.post<CorrelateAlertsResponse>('/llm/correlate-alerts', {
+      alerts,
+    })
 
     return res.data
   },

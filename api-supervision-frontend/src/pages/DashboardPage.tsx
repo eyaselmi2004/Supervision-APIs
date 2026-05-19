@@ -182,8 +182,13 @@ export const DashboardPage: React.FC = () => {
     }
 
     try {
-      const servicesResponse = await apiServicesService.getByProject(selectedProject.id)
-      const services = (Array.isArray(servicesResponse) ? servicesResponse : []) as ApiService[]
+      const servicesResponse = await api.get<ApiService[]>('/api-services', {
+        params: {
+          project_id: selectedProject.id,
+        },
+      })
+
+      const services = (Array.isArray(servicesResponse.data) ? servicesResponse.data : []) as ApiService[]
       const serviceIds = new Set(services.map((service) => service.id))
 
       const alertsResponse = await api.get<DashboardAlert[]>('/alerts', {

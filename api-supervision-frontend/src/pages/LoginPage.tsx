@@ -7,9 +7,12 @@ export const LoginPage: React.FC = () => {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const redirect = searchParams.get('redirect')
+  const oauthError = searchParams.get('oauth_error')
 
   const [form, setForm] = useState({ email: '', password: '' })
-  const [error, setError] = useState('')
+  const [error, setError] = useState(
+    oauthError ? 'Connexion OAuth échouée. Veuillez réessayer.' : ''
+  )
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -39,6 +42,7 @@ export const LoginPage: React.FC = () => {
         <button onClick={() => navigate('/')} className="auth-back-btn">
           <ArrowLeft size={14} /> Back to home
         </button>
+
         <button className="auth-brand" onClick={() => navigate('/')}>
           <span className="auth-logo">⌁</span>
           <span>
@@ -102,6 +106,22 @@ export const LoginPage: React.FC = () => {
               </div>
             </label>
 
+            <div className="auth-separator">
+              <span />
+              <small>ou continuer avec</small>
+              <span />
+            </div>
+
+            <div className="oauth-actions">
+              <button type="button" className="oauth-btn" onClick={() => authService.loginWithGoogle()}>
+                Continuer avec Google
+              </button>
+
+              <button type="button" className="oauth-btn" onClick={() => authService.loginWithGithub()}>
+                Continuer avec GitHub
+              </button>
+            </div>
+
             {error && (
               <div className="auth-error">
                 <AlertCircle size={16} />
@@ -117,10 +137,6 @@ export const LoginPage: React.FC = () => {
           <div className="auth-switch">
             Don’t have an account? <button onClick={goToRegister}>Create one</button>
           </div>
-
-          {redirect && (
-            <p className="auth-note">Utilise le même email que celui qui a reçu l’invitation.</p>
-          )}
         </section>
       </main>
     </div>
@@ -134,6 +150,7 @@ const authStyles = `
   color: var(--text-primary);
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
+
 .auth-topbar {
   height: 72px;
   display: flex;
@@ -143,6 +160,7 @@ const authStyles = `
   border-bottom: 1px solid var(--border);
   background: var(--bg-main);
 }
+
 .auth-back-btn,
 .auth-brand {
   display: inline-flex;
@@ -158,12 +176,14 @@ const authStyles = `
   font-family: inherit;
   font-weight: 700;
 }
+
 .auth-brand {
   border: 0;
   background: transparent;
   color: var(--text-primary);
   padding: 0;
 }
+
 .auth-logo {
   width: 32px;
   height: 32px;
@@ -176,7 +196,13 @@ const authStyles = `
   font-size: 20px;
   font-weight: 900;
 }
-.auth-brand strong { display: block; line-height: 1; font-size: 15px; }
+
+.auth-brand strong {
+  display: block;
+  line-height: 1;
+  font-size: 15px;
+}
+
 .auth-brand small {
   display: block;
   margin-top: 4px;
@@ -185,6 +211,7 @@ const authStyles = `
   text-transform: uppercase;
   letter-spacing: .15em;
 }
+
 .auth-shell {
   width: min(1060px, calc(100% - 48px));
   margin: 0 auto;
@@ -195,9 +222,11 @@ const authStyles = `
   align-items: center;
   padding: 48px 0;
 }
+
 .auth-info-panel {
   max-width: 560px;
 }
+
 .auth-eyebrow {
   width: fit-content;
   border: 1px solid var(--border);
@@ -210,6 +239,7 @@ const authStyles = `
   font-size: 11px;
   font-weight: 900;
 }
+
 .auth-info-panel h1 {
   margin: 18px 0 0;
   color: var(--text-primary);
@@ -218,17 +248,20 @@ const authStyles = `
   letter-spacing: -0.04em;
   font-weight: 900;
 }
+
 .auth-info-panel p {
   margin: 20px 0 0;
   color: var(--text-muted);
   font-size: 16px;
   line-height: 1.75;
 }
+
 .auth-benefits {
   display: grid;
   gap: 12px;
   margin-top: 32px;
 }
+
 .auth-benefits div {
   display: flex;
   align-items: center;
@@ -240,7 +273,11 @@ const authStyles = `
   color: var(--text-muted);
   font-weight: 700;
 }
-.auth-benefits svg { color: var(--pink); }
+
+.auth-benefits svg {
+  color: var(--pink);
+}
+
 .auth-card {
   background: var(--background-card);
   border: 1px solid var(--border);
@@ -248,22 +285,26 @@ const authStyles = `
   padding: 34px;
   box-shadow: 0 24px 54px rgba(0,0,0,.20);
 }
+
 .auth-card-heading h2 {
   margin: 0;
   font-size: 28px;
   color: var(--text-primary);
   letter-spacing: -0.03em;
 }
+
 .auth-card-heading p {
   margin: 8px 0 0;
   color: var(--text-muted);
   line-height: 1.6;
 }
+
 .auth-form {
   display: grid;
   gap: 18px;
   margin-top: 26px;
 }
+
 .auth-form label > span {
   display: block;
   margin-bottom: 8px;
@@ -271,6 +312,7 @@ const authStyles = `
   font-size: 13px;
   font-weight: 800;
 }
+
 .auth-input-wrap {
   height: 46px;
   display: flex;
@@ -282,10 +324,12 @@ const authStyles = `
   border-radius: 11px;
   color: var(--text-subtle);
 }
+
 .auth-input-wrap:focus-within {
   border-color: var(--pink-mid);
   box-shadow: 0 0 0 3px var(--pink-bg);
 }
+
 .auth-input-wrap input {
   flex: 1;
   border: 0;
@@ -295,7 +339,48 @@ const authStyles = `
   font-family: inherit;
   font-size: 14px;
 }
-.auth-input-wrap input::placeholder { color: var(--text-subtle); }
+
+.auth-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-subtle);
+}
+
+.auth-separator span {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.auth-separator small {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.oauth-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.oauth-btn {
+  height: 44px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.oauth-btn:hover {
+  border-color: var(--pink-mid);
+}
+
 .auth-error {
   display: flex;
   align-items: center;
@@ -308,6 +393,7 @@ const authStyles = `
   font-size: 13px;
   font-weight: 700;
 }
+
 .auth-primary {
   height: 46px;
   border-radius: 11px;
@@ -318,13 +404,19 @@ const authStyles = `
   font-weight: 900;
   cursor: pointer;
 }
-.auth-primary:disabled { opacity: .65; cursor: not-allowed; }
+
+.auth-primary:disabled {
+  opacity: .65;
+  cursor: not-allowed;
+}
+
 .auth-switch {
   margin-top: 22px;
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;
 }
+
 .auth-switch button {
   border: 0;
   background: transparent;
@@ -333,20 +425,33 @@ const authStyles = `
   cursor: pointer;
   font-family: inherit;
 }
-.auth-note {
-  margin: 12px 0 0;
-  text-align: center;
-  color: var(--text-subtle);
-  font-size: 12px;
-}
+
 @media (max-width: 880px) {
-  .auth-shell { grid-template-columns: 1fr; gap: 28px; }
-  .auth-info-panel { display: none; }
+  .auth-shell {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+
+  .auth-info-panel {
+    display: none;
+  }
 }
+
 @media (max-width: 520px) {
-  .auth-topbar { padding: 0 16px; }
-  .auth-shell { width: min(100% - 28px, 1060px); }
-  .auth-card { padding: 24px; }
-  .auth-brand small { display: none; }
+  .auth-topbar {
+    padding: 0 16px;
+  }
+
+  .auth-shell {
+    width: min(100% - 28px, 1060px);
+  }
+
+  .auth-card {
+    padding: 24px;
+  }
+
+  .auth-brand small {
+    display: none;
+  }
 }
 `

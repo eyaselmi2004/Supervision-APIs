@@ -31,6 +31,18 @@ class EndpointTestRequest(BaseModel):
     json_body: dict | list | None = None
 
 
+def normalize_endpoint_path(path: str) -> str:
+    path = path.strip()
+
+    if not path.startswith("/"):
+        path = f"/{path}"
+
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+
+    return path
+
+
 async def is_global_admin(conn: asyncpg.Connection, user_id: str) -> bool:
     role = await conn.fetchval(
         """
@@ -264,9 +276,20 @@ async def create_endpoint(
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable")
 
+    normalized_path = normalize_endpoint_path(data.path)
+
+    existing = await repo.find_endpoint(
+        service_id,
+        normalized_path,
+        data.method.value,
+    )
+
+    if existing:
+        return dict(existing)
+
     row = await repo.create_endpoint(
         service_id,
-        data.path,
+        normalized_path,
         data.method.value,
         data.is_active,
     )
@@ -329,10 +352,16 @@ async def discover_endpoints(
 
     discovered = 0
     created = 0
+    skipped_existing = 0
+    normalized_duplicates = 0
 
-    for path, operations in paths.items():
+    seen: set[tuple[str, str]] = set()
+
+    for raw_path, operations in paths.items():
         if not isinstance(operations, dict):
             continue
+
+        path = normalize_endpoint_path(raw_path)
 
         for method_name in operations.keys():
             if method_name.lower() not in allowed_methods:
@@ -341,9 +370,18 @@ async def discover_endpoints(
             discovered += 1
             method = method_name.upper()
 
+            key = (method, path)
+
+            if key in seen:
+                normalized_duplicates += 1
+                continue
+
+            seen.add(key)
+
             existing = await repo.find_endpoint(service_id, path, method)
 
             if existing:
+                skipped_existing += 1
                 continue
 
             await repo.create_endpoint(service_id, path, method, True)
@@ -355,6 +393,8 @@ async def discover_endpoints(
         "base_url": base_url,
         "discovered": discovered,
         "created": created,
+        "skipped_existing": skipped_existing,
+        "normalized_duplicates": normalized_duplicates,
     }
 
 
@@ -383,7 +423,7 @@ async def test_endpoint(
         raise HTTPException(status_code=404, detail="Endpoint introuvable")
 
     base_url = str(service["base_url"]).rstrip("/")
-    path = str(endpoint["path"])
+    path = normalize_endpoint_path(str(endpoint["path"]))
     method = str(endpoint["method"]).upper()
     url = f"{base_url}{path}"
 
@@ -455,10 +495,7 @@ async def login_to_monitored_api(
         raise HTTPException(status_code=404, detail="Service introuvable")
 
     base_url = str(service["base_url"]).rstrip("/")
-    login_path = (data.login_path or "/api/v1/login/access-token").strip()
-
-    if not login_path.startswith("/"):
-        login_path = f"/{login_path}"
+    login_path = normalize_endpoint_path(data.login_path or "/api/v1/login/access-token")
 
     login_url = f"{base_url}{login_path}"
 

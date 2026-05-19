@@ -7,6 +7,7 @@ import LandingPage from './pages/LandingPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { OnboardingPage } from './pages/OnboardingPage'
+import { OAuthSuccessPage } from './pages/OAuthSuccessPage'
 
 import { DashboardPage } from './pages/DashboardPage'
 import { ProjectsPage } from './pages/ProjectsPage'
@@ -25,7 +26,6 @@ import { NotificationsPage } from './pages/NotificationsPage'
 import { UsersPage } from './pages/UsersPage'
 import { VerifyEmailPage } from './pages/VerifyEmailPage'
 
-
 const App: React.FC = () => {
   return (
     <Routes>
@@ -33,6 +33,8 @@ const App: React.FC = () => {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />
+
+      <Route path="/oauth-success" element={<OAuthSuccessPage />} />
 
       <Route
         path="/onboarding"
@@ -88,8 +90,6 @@ const App: React.FC = () => {
         }
       />
 
-      {/* Invitation routes are public.
-          The page itself redirects to login/register if needed. */}
       <Route
         path="/teams/invitations/:invitationId/accept"
         element={<InvitationAcceptPage mode="accept" />}

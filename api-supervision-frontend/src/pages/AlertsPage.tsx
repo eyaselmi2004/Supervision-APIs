@@ -8,6 +8,7 @@ import {
   CircleCheck,
   ChevronDown,
   FolderOpen,
+  BrainCircuit,
 } from 'lucide-react'
 import { Layout } from '../components/layout/Layout'
 import { Header } from '../components/layout/Header'
@@ -20,6 +21,7 @@ import { alertsService } from '../services/alerts.service'
 import { apiServicesService } from '../services/apiServices.service'
 import { projectsService } from '../services/projects.service'
 import { teamsService } from '../services/teams.service'
+import { llmService } from '../services/llm.service'
 import { useAuth } from '../hooks/useAuth'
 import { useProject } from '../contexts/ProjectContext'
 import api from '../services/api'
@@ -252,6 +254,45 @@ const AssigneeDropdown: React.FC<{
   )
 }
 
+
+interface AnalysisSection {
+  title: string
+  body: string
+}
+
+const parseAiAnalysisSections = (analysis: string): AnalysisSection[] => {
+  if (!analysis.trim()) return []
+
+  const blocks = analysis
+    .split(/(?=^\s*\d+\.\s+)/gm)
+    .map((block) => block.trim())
+    .filter(Boolean)
+
+  if (blocks.length === 0) {
+    return [{ title: 'Analyse IA', body: analysis.trim() }]
+  }
+
+  return blocks.map((block) => {
+    const lines = block.split('\n').map((line) => line.trim()).filter(Boolean)
+    const firstLine = lines[0] || 'Analyse IA'
+    const title = firstLine.replace(/^\d+\.\s*/, '').replace(/\s*:\s*$/, '')
+    const body = lines.slice(1).join('\n').replace(/^[-•]\s*/gm, '• ')
+
+    return {
+      title,
+      body: body || 'Aucun détail supplémentaire.',
+    }
+  })
+}
+
+const getCorrelationStats = (alerts: Alert[]) => {
+  const open = alerts.filter((alert) => alert.status === 'OPEN').length
+  const critical = alerts.filter((alert) => alert.severity === 'CRITICAL').length
+  const warning = alerts.filter((alert) => alert.severity === 'WARNING').length
+
+  return { open, critical, warning }
+}
+
 export const AlertsPage: React.FC = () => {
   const { isAdmin, isDevOps, user } = useAuth()
   const { selectedProject } = useProject()
@@ -265,6 +306,10 @@ export const AlertsPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [showRuleModal, setShowRuleModal] = useState(false)
+  const [showCorrelationModal, setShowCorrelationModal] = useState(false)
+  const [correlationLoading, setCorrelationLoading] = useState(false)
+  const [correlationAnalysis, setCorrelationAnalysis] = useState('')
+  const [correlationError, setCorrelationError] = useState('')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const [ruleForm, setRuleForm] = useState({
@@ -449,7 +494,48 @@ export const AlertsPage: React.FC = () => {
     setRules(r)
   }
 
+
+  const buildAlertCorrelationPayload = () => {
+    return alerts.map((alert) => ({
+      id: alert.id,
+      message: alert.message,
+      severity: alert.severity,
+      status: alert.status,
+      created_at: alert.created_at,
+      resolved_at: (alert as any).resolved_at,
+      rule_id: (alert as any).rule_id,
+      endpoint_id: (alert as any).endpoint_id,
+      api_service_id: (alert as any).api_service_id,
+      project_id: selectedProject?.id,
+      assigned_to_id: (alert as any).assigned_to_id,
+    }))
+  }
+
+  const handleCorrelateAlerts = async () => {
+    if (!alerts.length) return
+
+    setCorrelationLoading(true)
+    setCorrelationError('')
+    setCorrelationAnalysis('')
+    setShowCorrelationModal(true)
+
+    try {
+      const response = await llmService.correlateAlerts(buildAlertCorrelationPayload())
+      setCorrelationAnalysis(response.analysis)
+    } catch (error: any) {
+      console.error('Erreur corrélation IA alertes:', error)
+      setCorrelationError(
+        error?.response?.data?.detail ||
+          "Impossible de générer la corrélation IA des alertes pour le moment.",
+      )
+    } finally {
+      setCorrelationLoading(false)
+    }
+  }
+
   const openCount = alerts.filter((a) => a.status === 'OPEN').length
+  const correlationSections = parseAiAnalysisSections(correlationAnalysis)
+  const correlationStats = getCorrelationStats(alerts)
 
   return (
     <Layout>
@@ -558,6 +644,23 @@ export const AlertsPage: React.FC = () => {
                       </option>
                     ))}
                   </select>
+
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={BrainCircuit}
+                    loading={correlationLoading}
+                    disabled={alerts.length < 2}
+                    onClick={handleCorrelateAlerts}
+                  >
+                    AI Correlation
+                  </Button>
+
+                  <span style={{ fontSize: '12px', color: 'var(--text-subtle)' }}>
+                    {alerts.length < 2
+                      ? 'Au moins 2 alertes nécessaires'
+                      : `${alerts.length} alertes analysables`}
+                  </span>
                 </div>
 
                 <div
@@ -812,6 +915,8 @@ export const AlertsPage: React.FC = () => {
         )}
       </div>
 
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
       {isAdmin && (
         <Modal
           open={showRuleModal}
@@ -880,6 +985,233 @@ export const AlertsPage: React.FC = () => {
           </div>
         </Modal>
       )}
+
+
+      <Modal
+        open={showCorrelationModal}
+        onClose={() => setShowCorrelationModal(false)}
+        title="Corrélation IA des alertes"
+        size="lg"
+      >
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            maxHeight: '72vh',
+            overflowY: 'auto',
+            paddingRight: '4px',
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1.4fr repeat(3, 0.7fr)',
+              gap: '12px',
+              alignItems: 'stretch',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '12px',
+                padding: '16px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border)',
+                borderRadius: '14px',
+              }}
+            >
+              <div
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: '12px',
+                  background: 'var(--pink-bg)',
+                  color: 'var(--pink)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <BrainCircuit size={19} />
+              </div>
+
+              <div>
+                <h3 style={{ margin: 0, fontSize: '15px', color: 'var(--text-primary)', fontWeight: 800 }}>
+                  Analyse AIOps du projet
+                </h3>
+                <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--text-subtle)', lineHeight: 1.6 }}>
+                  L’IA compare les alertes visibles pour détecter les patterns communs : endpoint, API,
+                  code HTTP, période, statut et sévérité.
+                </p>
+              </div>
+            </div>
+
+            {[
+              { label: 'Alertes', value: alerts.length },
+              { label: 'Ouvertes', value: correlationStats.open },
+              { label: 'Critiques', value: correlationStats.critical || correlationStats.warning },
+            ].map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  padding: '16px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                }}
+              >
+                <span style={{ fontSize: '11px', color: 'var(--text-subtle)', fontWeight: 800, textTransform: 'uppercase' }}>
+                  {item.label}
+                </span>
+                <strong style={{ marginTop: '8px', fontSize: '22px', color: 'var(--text-primary)' }}>
+                  {item.value}
+                </strong>
+              </div>
+            ))}
+          </div>
+
+          {correlationLoading && (
+            <div
+              style={{
+                padding: '26px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                borderRadius: '14px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    border: '3px solid var(--border)',
+                    borderTopColor: 'var(--pink)',
+                    animation: 'spin 0.9s linear infinite',
+                  }}
+                />
+                <div>
+                  <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Corrélation en cours
+                  </p>
+                  <p style={{ margin: '4px 0 0', fontSize: '12px', color: 'var(--text-subtle)' }}>
+                    Ollama analyse les similarités entre les alertes du projet.
+                  </p>
+                </div>
+              </div>
+
+              {[1, 2, 3].map((item) => (
+                <div
+                  key={item}
+                  className="skeleton"
+                  style={{ height: '42px', borderRadius: '10px', marginTop: '10px' }}
+                />
+              ))}
+            </div>
+          )}
+
+          {!correlationLoading && correlationError && (
+            <div
+              style={{
+                padding: '16px',
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.28)',
+                borderRadius: '14px',
+                color: '#ef4444',
+                fontSize: '13px',
+                lineHeight: 1.6,
+              }}
+            >
+              {correlationError}
+            </div>
+          )}
+
+          {!correlationLoading && correlationSections.length > 0 && (
+            <div style={{ display: 'grid', gap: '12px' }}>
+              {correlationSections.map((section, index) => (
+                <div
+                  key={`${section.title}-${index}`}
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '14px',
+                    padding: '16px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                    <span
+                      style={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: '8px',
+                        background: 'var(--pink-bg)',
+                        color: 'var(--pink)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '12px',
+                        fontWeight: 900,
+                      }}
+                    >
+                      {index + 1}
+                    </span>
+                    <h4 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '14px', fontWeight: 850 }}>
+                      {section.title}
+                    </h4>
+                  </div>
+
+                  <div
+                    style={{
+                      color: 'var(--text-muted)',
+                      fontSize: '13px',
+                      lineHeight: 1.75,
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {section.body}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: '10px',
+              paddingTop: '12px',
+              background: 'var(--bg-primary)',
+            }}
+          >
+            <span style={{ fontSize: '12px', color: 'var(--text-subtle)', alignSelf: 'center' }}>
+              Analyse basée uniquement sur les alertes affichées du projet actif.
+            </span>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <Button variant="secondary" onClick={() => setShowCorrelationModal(false)}>
+                Fermer
+              </Button>
+              <Button
+                icon={BrainCircuit}
+                loading={correlationLoading}
+                disabled={alerts.length < 2}
+                onClick={handleCorrelateAlerts}
+              >
+                Régénérer
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </Layout>
   )
 }
